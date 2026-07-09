@@ -19,6 +19,7 @@ DEFAULTS = {
     "dongle_opacity": 0.85,
     "dongle_always_on_top": True,
     "show_mode": "dev",
+    "idle_quit_minutes": 10,  # escondido por X min → o serviço se encerra (0 = nunca)
     "show_processes": ["code", "gnome-terminal", "ptyxis", "claude"],
     "proxy_enabled": False,
     "proxy_port": 8081,

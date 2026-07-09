@@ -60,6 +60,7 @@ class DongleWidget(QWidget):
         self._reset_5h = None
         self._reset_w = None
         self._hidden = False
+        self._idle_secs = 0
 
         self._font_label = QFont("Cantarell", 7)
         self._font_value_5h = QFont("Cantarell", 13, QFont.Weight.Bold)
@@ -90,7 +91,20 @@ class DongleWidget(QWidget):
         was_hidden = self._hidden
         self._update_display()
         if was_hidden and not self._hidden:
+            self._idle_secs = 0
             self.poll()  # reapareceu: dado fresco na hora
+            return
+        if not self._hidden:
+            self._idle_secs = 0
+            return
+        # Escondido: sem dev tools abertos o serviço não tem por que viver.
+        # O hook do bashrc ressuscita no próximo terminal (0 = nunca sair).
+        quit_min = self.cfg.get("idle_quit_minutes", 10)
+        if quit_min:
+            self._idle_secs += VIS_CHECK_MS / 1000
+            if self._idle_secs >= quit_min * 60:
+                print(f"[dongle] idle há {quit_min}min sem dev tools — encerrando", flush=True)
+                QApplication.quit()
 
     def _update_display(self):
         visible = True
