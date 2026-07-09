@@ -11,7 +11,7 @@ from PyQt6.QtCore import Qt, QTimer, QRectF
 from PyQt6.QtGui import QPainter, QColor, QBrush, QFont
 
 REFRESH_MS = 5000
-SOURCE_LABELS = {"api": "API oficial", "proxy": "proxy", "jobs": "estimativa local"}
+SOURCE_LABELS = {"api": "API oficial", "proxy": "proxy", "none": "sem dado"}
 SHOW_MODES = [("Sempre visível", "always"),
               ("Só com Claude Code", "claude"),
               ("Só com VS Code / terminal", "dev"),

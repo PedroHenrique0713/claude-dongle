@@ -2,10 +2,14 @@ import json, time, urllib.request, urllib.error
 from datetime import datetime
 from pathlib import Path
 
+import config
+
 CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+CACHE_PATH = config.CONFIG_DIR / "usage_cache.json"
 
 _cache = {"data": None, "fetched_at": 0, "next_try": 0}
+_disk_checked = False
 
 
 def _read_token():
@@ -70,6 +74,17 @@ def _normalize(body):
 
 
 def _stale():
+    # Sobrevive a restart: sem cache em memória, recupera o último dado real
+    # gravado em disco — melhor um valor oficial velho do que nenhum.
+    global _disk_checked
+    if _cache["data"] is None and not _disk_checked:
+        _disk_checked = True
+        try:
+            d = json.loads(CACHE_PATH.read_text())
+            _cache["data"] = d["data"]
+            _cache["fetched_at"] = d["fetched_at"]
+        except (OSError, json.JSONDecodeError, KeyError):
+            pass
     if _cache["data"] is None:
         return None
     d = dict(_cache["data"])
@@ -111,4 +126,9 @@ def fetch(min_interval=60):
     _cache["data"] = data
     _cache["fetched_at"] = now
     _cache["next_try"] = 0
+    try:
+        CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CACHE_PATH.write_text(json.dumps({"data": data, "fetched_at": now}))
+    except OSError:
+        pass
     return data

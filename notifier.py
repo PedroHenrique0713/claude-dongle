@@ -12,6 +12,8 @@ def send(title: str, message: str, urgency: str = "normal"):
 
 def check_thresholds(usage: dict, state: dict, sent_path: str) -> bool:
     pct = usage["pct"]
+    if pct is None:
+        return False
     pct_5h = usage.get("pct_5h")
     sent_file = Path(sent_path)
     sent = set()
