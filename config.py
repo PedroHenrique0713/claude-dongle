@@ -18,7 +18,7 @@ DEFAULTS = {
     "log_token_source": "jsonl",
     "dongle_opacity": 0.85,
     "dongle_always_on_top": True,
-    "show_mode": "always",
+    "show_mode": "dev",
     "show_processes": ["code", "gnome-terminal", "ptyxis", "claude"],
     "proxy_enabled": False,
     "proxy_port": 8081,
