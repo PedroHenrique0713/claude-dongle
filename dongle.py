@@ -17,6 +17,11 @@ PAD = 14
 BAR_Y = 27.0
 CLICK_SLOP = 8  # px manhattan: abaixo disso o release conta como clique
 HOT_RESET_S = 30 * 60  # sessão resetando em menos que isso: countdown ganha destaque
+VIS_CHECK_MS = 5000  # gatilho de visibilidade (abrir/fechar terminal reage rápido)
+
+# comm dos processos que caracterizam "trabalhando em dev" (modo show_mode=dev)
+DEV_PROCS = ["code", "cursor", "ptyxis", "gnome-terminal", "kgx", "konsole",
+             "alacritty", "kitty", "wezterm", "tilix"]
 
 
 class DongleWidget(QWidget):
@@ -75,19 +80,32 @@ class DongleWidget(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.poll)
         self._timer.start(self.cfg["poll_interval"] * 1000)
+        # Visibilidade num timer próprio, mais ágil que o poll de dados
+        self._vis_timer = QTimer(self)
+        self._vis_timer.timeout.connect(self._tick_visibility)
+        self._vis_timer.start(VIS_CHECK_MS)
         self.poll()
+
+    def _tick_visibility(self):
+        was_hidden = self._hidden
+        self._update_display()
+        if was_hidden and not self._hidden:
+            self.poll()  # reapareceu: dado fresco na hora
 
     def _update_display(self):
         visible = True
         mode = self.cfg.get("show_mode", "always")
         if mode != "always":
-            names = {"claude": ["claude"], "dev": ["code", "gnome-terminal", "ptyxis"],
+            names = {"claude": ["claude"], "dev": DEV_PROCS,
                      "custom": self.cfg.get("show_processes", [])}.get(mode, [])
             visible = False
             if names:
                 try:
                     out = subprocess.check_output(["ps", "-eo", "comm="], text=True, timeout=3)
-                    visible = any(n in out for n in names)
+                    # comm trunca em 15 chars → prefixo por linha; nunca substring
+                    # no blob inteiro ("code" casaria com "opencode")
+                    lines = [l.strip() for l in out.splitlines()]
+                    visible = any(l.startswith(n) for l in lines for n in names)
                 except Exception:
                     pass
         if visible:
@@ -102,6 +120,8 @@ class DongleWidget(QWidget):
     def poll(self):
         try:
             self._update_display()
+            if self._hidden:
+                return  # sem dev tools abertos: não gasta chamada de API
             # cfg é compartilhado com o Dashboard: reaplica o que muda ao vivo
             self.setWindowOpacity(self.cfg.get("dongle_opacity", 0.85))
             u = monitor.calc_usage(self.cfg)
