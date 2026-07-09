@@ -22,7 +22,7 @@ DEFAULTS = {
     "show_processes": ["code", "gnome-terminal", "ptyxis", "claude"],
     "proxy_enabled": False,
     "proxy_port": 8081,
-    "api_poll_interval": 60,
+    "api_poll_interval": 300,  # o endpoint de usage rate-limita polling agressivo
 }
 
 

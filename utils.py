@@ -36,12 +36,12 @@ def fmt_time(seconds):
         days = hours // 24
         rh = hours % 24
         if rh == 0:
-            return f"~{days}d"
+            return f"{days}d"
         if mins == 0:
-            return f"~{days}d {rh}h"
-        return f"~{days}d {rh}h{mins:02d}"
+            return f"{days}d {rh}h"
+        return f"{days}d {rh}h{mins:02d}"
     if hours > 0:
         if mins == 0:
-            return f"~{hours}h"
-        return f"~{hours}h{mins:02d}"
-    return f"~{mins}m"
+            return f"{hours}h"
+        return f"{hours}h{mins:02d}"
+    return f"{mins}m"

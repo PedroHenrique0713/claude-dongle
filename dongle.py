@@ -7,7 +7,7 @@ from PyQt6.QtGui import (QPainter, QColor, QBrush, QPen, QFont, QFontMetrics,
 
 import monitor, config, notifier
 from utils import (color as _color, fmt_time as _fmt_time,
-                   FG, FG2, FG3, ACCENT)
+                   FG, FG2, FG3)
 
 SENT_PATH = str(config.CONFIG_DIR / "sent_thresholds.json")
 
@@ -52,7 +52,6 @@ class DongleWidget(QWidget):
         self._source = "jobs"
         self._reset_5h = None
         self._reset_w = None
-        self._scope_7d = None
         self._hidden = False
 
         self._font_label = QFont("Cantarell", 7)
@@ -111,11 +110,11 @@ class DongleWidget(QWidget):
 
             self._s_pct = u.get("pct_5h")
             self._w_pct = u.get("pct_7d", u["pct"])
-            self._stale = u.get("stale", False)
+            # jobs = estimativa local, não a conta real: esmaece como stale
+            self._stale = u.get("stale", False) or u.get("source") == "jobs"
             self._source = u["source"]
             self._reset_5h = u.get("seconds_until_reset_5h")
             self._reset_w = u.get("seconds_until_reset")
-            self._scope_7d = u.get("pct_7d_scope")
 
             self.update()
 
@@ -148,14 +147,6 @@ class DongleWidget(QWidget):
                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "5h")
         p.drawText(QRectF(x7d, 5, W7D, 9),
                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "7d")
-        if self._scope_7d:
-            # Ponto discreto: o 7d exibido é o limite por modelo (pct_7d_scope)
-            lw = QFontMetrics(self._font_label).horizontalAdvance("7d")
-            dot = QColor(ACCENT)
-            dot.setAlpha(200)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(dot)
-            p.drawEllipse(QRectF(x7d + lw + 2, 7.5, 3, 3))
 
         # Sessão (5h): a métrica dominante
         c5 = self._metric_color(self._s_pct)
@@ -173,7 +164,7 @@ class DongleWidget(QWidget):
             vw = QFontMetrics(self._font_value_5h).horizontalAdvance(v5)
             p.drawText(QRectF(PAD + vw + 6, 12, x7d - PAD - vw - 10, 21),
                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                       "⟳ " + _fmt_time(self._reset_5h))
+                       _fmt_time(self._reset_5h))
 
         # Semana (7d): secundária
         c7 = self._metric_color(self._w_pct)
