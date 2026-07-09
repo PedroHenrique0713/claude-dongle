@@ -110,8 +110,7 @@ class DongleWidget(QWidget):
 
             self._s_pct = u.get("pct_5h")
             self._w_pct = u.get("pct_7d", u["pct"])
-            # jobs = estimativa local, não a conta real: esmaece como stale
-            self._stale = u.get("stale", False) or u.get("source") == "jobs"
+            self._stale = u.get("stale", False)
             self._source = u["source"]
             self._reset_5h = u.get("seconds_until_reset_5h")
             self._reset_w = u.get("seconds_until_reset")

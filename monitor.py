@@ -93,7 +93,6 @@ def calc_usage(state: dict) -> dict:
     seconds_until_reset = int((next_reset - now).total_seconds())
     seconds_until_reset_5h = None
 
-    jobs = read_jobs(state["claude_dir"])
     sessions = read_sessions(state["claude_dir"])
     account = get_account_identity()
     account_changed, _ = detect_account_change()
@@ -146,33 +145,13 @@ def calc_usage(state: dict) -> dict:
         proxy_age = int(now_ts - proxy_data["_updated_at"])
         overage = proxy_data.get("overage_status", "")
     else:
-        # Last resort: estimate from background-job token counts. Only covers
-        # bg jobs (not interactive sessions) against a user-guessed limit, so
-        # it is a rough floor, never the real account utilization.
+        # Sem fonte real (API e proxy indisponíveis, sem cache): mostrar "--".
+        # Número inventado na tela é pior que nenhum número.
+        pct_7d = None
         pct_5h = None
         overage = None
         proxy_age = None
-        def parse_ts(ts_str):
-            try:
-                return datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-            except (ValueError, AttributeError):
-                return None
-        done_tokens = 0
-        running_tokens = 0
-        for j in jobs:
-            created = parse_ts(j.get("created_at", ""))
-            if created and created < last_reset:
-                continue
-            if j["state"] in ("done", "running"):
-                if j["state"] == "done":
-                    done_tokens += j["tokens"]
-                else:
-                    running_tokens += j["tokens"]
-        total_tokens = done_tokens + running_tokens
-        limit = state["weekly_limit"]
-        pct_7d = round((total_tokens / limit * 100) if limit > 0 else 0, 1)
-        reset_7d_epoch = int(next_reset.timestamp())
-        source = "jobs"
+        source = "none"
 
     active_sessions = [s for s in sessions if s["status"] == "busy"]
     idle_sessions = [s for s in sessions if s["status"] == "idle"]
@@ -204,13 +183,6 @@ def calc_usage(state: dict) -> dict:
         result["proxy_age_seconds"] = proxy_age
     if overage:
         result["overage_status"] = overage
-    if source == "jobs":
-        result.update({
-            "total_tokens": total_tokens,
-            "done_tokens": done_tokens,
-            "running_tokens": running_tokens,
-            "limit": limit,
-        })
     return result
 
 def _last_reset(day: str, time_str: str, tz_name: str) -> datetime:
