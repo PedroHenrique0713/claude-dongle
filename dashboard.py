@@ -1,0 +1,1 @@
+from tray import Dashboard
