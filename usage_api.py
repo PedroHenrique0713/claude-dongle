@@ -73,18 +73,24 @@ def _normalize(body):
     return out
 
 
-def _stale():
-    # Sobrevive a restart: sem cache em memória, recupera o último dado real
-    # gravado em disco — melhor um valor oficial velho do que nenhum.
+def _load_disk():
+    # Sobrevive a restart e desduplica entre processos: o último dado real
+    # fica em disco e qualquer processo novo parte dele em vez da rede.
     global _disk_checked
-    if _cache["data"] is None and not _disk_checked:
-        _disk_checked = True
-        try:
-            d = json.loads(CACHE_PATH.read_text())
-            _cache["data"] = d["data"]
-            _cache["fetched_at"] = d["fetched_at"]
-        except (OSError, json.JSONDecodeError, KeyError):
-            pass
+    if _disk_checked:
+        return
+    _disk_checked = True
+    try:
+        d = json.loads(CACHE_PATH.read_text())
+        _cache["data"] = d["data"]
+        _cache["fetched_at"] = d["fetched_at"]
+    except (OSError, json.JSONDecodeError, KeyError):
+        pass
+
+
+def _stale():
+    if _cache["data"] is None:
+        _load_disk()
     if _cache["data"] is None:
         return None
     d = dict(_cache["data"])
@@ -95,6 +101,8 @@ def _stale():
 
 def fetch(min_interval=60):
     now = time.time()
+    if _cache["data"] is None:
+        _load_disk()
     if _cache["data"] is not None and now - _cache["fetched_at"] < min_interval:
         return _cache["data"]
     # Backoff também sobre tentativas falhas, senão cada poll (dongle 30s,
