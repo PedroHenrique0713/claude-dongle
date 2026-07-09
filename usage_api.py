@@ -114,7 +114,8 @@ def fetch(min_interval=60):
         with urllib.request.urlopen(req, timeout=10) as r:
             body = json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
-        _cache["next_try"] = now + (300 if e.code == 429 else min_interval)
+        # 429 tem janela longa e retry renova a penalidade: espaçar bem
+        _cache["next_try"] = now + (900 if e.code == 429 else min_interval)
         return _stale()
     except (urllib.error.URLError, json.JSONDecodeError, OSError):
         _cache["next_try"] = now + min_interval
