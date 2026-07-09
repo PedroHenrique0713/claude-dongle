@@ -222,7 +222,7 @@ class DashboardWidget(QWidget):
         self.bars_box.setContentsMargins(0, 0, 0, 0)
         self.bars_box.setSpacing(13)
         self.row_5h = UsageRow("Sessão (5h)")
-        self.row_7d = UsageRow("Semana")
+        self.row_7d = UsageRow("Semana", compact=True)
         self.bars_box.addWidget(self.row_5h)
         self.bars_box.addWidget(self.row_7d)
         main.addLayout(self.bars_box)
