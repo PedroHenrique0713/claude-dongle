@@ -18,11 +18,24 @@ Dongle flutuante com os percentuais de rate limit do Claude Code: janela de sess
 ./run.sh config   # janela de configuração
 ```
 
-Como serviço systemd de usuário: unit `claude-monitor.service` em `~/.config/systemd/user/`.
+Como serviço systemd de usuário: unit `claude-monitor.service` (versionada no repo, instalada em `~/.config/systemd/user/`).
 
 ```bash
 systemctl --user status claude-monitor.service
 ```
+
+## Ciclo de vida (ativação sob demanda)
+
+O serviço **não** sobe no boot (autostart desabilitado de propósito). O ciclo é:
+
+1. **Sobe**: hook no `~/.bashrc` dá `systemctl --user start --no-block` em todo shell
+   interativo — abrir um terminal (ou o VS Code, que sonda o ambiente com shell
+   interativo) ergue o serviço na hora. Idempotente: já rodando, é no-op.
+2. **Mostra/esconde**: com `show_mode: dev`, o dongle só aparece enquanto houver
+   dev tools abertos (match por prefixo do comm: code, cursor, ptyxis, kgx…).
+   Escondido, o poll não consome API.
+3. **Morre**: escondido por `idle_quit_minutes` (padrão 10), o processo se encerra
+   sozinho. O próximo terminal aberto ressuscita via hook.
 
 ## Configuração
 
