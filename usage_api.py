@@ -5,7 +5,7 @@ from pathlib import Path
 CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 
-_cache = {"data": None, "fetched_at": 0}
+_cache = {"data": None, "fetched_at": 0, "next_try": 0}
 
 
 def _read_token():
@@ -82,8 +82,13 @@ def fetch(min_interval=60):
     now = time.time()
     if _cache["data"] is not None and now - _cache["fetched_at"] < min_interval:
         return _cache["data"]
+    # Backoff também sobre tentativas falhas, senão cada poll (dongle 30s,
+    # dashboard 5s) re-dispara a request e alimenta o próprio 429.
+    if now < _cache["next_try"]:
+        return _stale()
     token = _read_token()
     if not token:
+        _cache["next_try"] = now + min_interval
         return _stale()
     req = urllib.request.Request(USAGE_URL, headers={
         "Authorization": f"Bearer {token}",
@@ -93,11 +98,17 @@ def fetch(min_interval=60):
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             body = json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        _cache["next_try"] = now + (300 if e.code == 429 else min_interval)
+        return _stale()
     except (urllib.error.URLError, json.JSONDecodeError, OSError):
+        _cache["next_try"] = now + min_interval
         return _stale()
     data = _normalize(body)
     if data.get("pct_7d") is None and data.get("pct_5h") is None:
+        _cache["next_try"] = now + min_interval
         return _stale()
     _cache["data"] = data
     _cache["fetched_at"] = now
+    _cache["next_try"] = 0
     return data
