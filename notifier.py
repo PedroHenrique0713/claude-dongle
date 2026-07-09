@@ -32,8 +32,9 @@ def check_thresholds(usage: dict, state: dict, sent_path: str) -> bool:
             if usage.get("total_tokens") is not None:
                 detail = f" · {usage['total_tokens']:,}/{usage['limit']:,}t"
             sess = f"Sessão: {pct_5h:.0f}% " if pct_5h is not None else ""
+            scope = usage.get("pct_7d_scope")
             send(
-                f"Claude Code: {pct:.0f}% semanal",
+                f"Claude Code: {pct:.0f}% semanal" + (f" ({scope})" if scope else ""),
                 f"{sess}· Reset {_fmt_time(usage['seconds_until_reset'])}{detail}",
                 "critical" if t >= 95 else "normal"
             )
