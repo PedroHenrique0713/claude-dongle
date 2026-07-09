@@ -1,15 +1,18 @@
-RED = "#ff2244"
-ORANGE = "#ff6600"
-YELLOW = "#ffcc00"
-GREEN = "#00ff88"
-BG = "#0d0d0d"
-BG2 = "#1a1a1a"
-BG3 = "#252525"
-FG = "#e8e8e8"
-FG2 = "#888888"
-FG3 = "#555555"
-SEP = "#2a2a2a"
-ACCENT = "#4488ff"
+# Palette aligned to GNOME Adwaita dark: neutral surfaces, a green->red
+# severity ramp for usage, and a single interactive accent (Adwaita blue,
+# deliberately outside the severity spectrum).
+RED = "#f66151"
+ORANGE = "#ff7800"
+YELLOW = "#f6d32d"
+GREEN = "#33d17a"
+BG = "#242424"
+BG2 = "#303030"
+BG3 = "#3a3a3a"
+FG = "#f2f2f2"
+FG2 = "#9a9a9a"
+FG3 = "#6b6b6b"
+SEP = "#3c3c3c"
+ACCENT = "#3584e4"
 
 
 def color(pct: float) -> str:

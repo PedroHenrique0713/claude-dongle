@@ -228,18 +228,3 @@ def _last_reset(day: str, time_str: str, tz_name: str) -> datetime:
     last = now - timedelta(days=days_ago)
     last = last.replace(hour=h, minute=m, second=0, microsecond=0)
     return last.astimezone(timezone.utc)
-
-def try_enable_claude_proxy():
-    settings_path = Path.home() / ".claude" / "settings.json"
-    if not settings_path.exists():
-        return
-    ca_cert = str(Path.home() / ".mitmproxy" / "mitmproxy-ca-cert.pem")
-    if not Path(ca_cert).exists():
-        return
-    try:
-        data = json.loads(settings_path.read_text())
-        if not data.get("NODE_EXTRA_CA_CERTS"):
-            data["NODE_EXTRA_CA_CERTS"] = ca_cert
-            settings_path.write_text(json.dumps(data, indent=2))
-    except (json.JSONDecodeError, OSError):
-        pass
