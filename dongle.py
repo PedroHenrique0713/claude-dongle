@@ -11,10 +11,10 @@ from utils import (color as _color, fmt_time as _fmt_time,
 
 SENT_PATH = str(config.CONFIG_DIR / "sent_thresholds.json")
 
-DONGLE_W, DONGLE_H = 150, 46
-DONGLE_R = 23
-PAD = 16
-W7D = 34  # coluna secundária (semana)
+DONGLE_W, DONGLE_H = 216, 36
+DONGLE_R = 18
+PAD = 14
+BAR_Y = 27.0
 CLICK_SLOP = 8  # px manhattan: abaixo disso o release conta como clique
 HOT_RESET_S = 30 * 60  # sessão resetando em menos que isso: countdown ganha destaque
 
@@ -47,15 +47,17 @@ class DongleWidget(QWidget):
         self._last_usage = None
 
         self._s_pct = None
-        self._w_pct = None
+        self._w_all = None
+        self._scoped_pct = None
+        self._scoped_name = None
         self._stale = False
-        self._source = "jobs"
+        self._source = "none"
         self._reset_5h = None
         self._reset_w = None
         self._hidden = False
 
         self._font_label = QFont("Cantarell", 7)
-        self._font_value_5h = QFont("Cantarell", 14, QFont.Weight.Bold)
+        self._font_value_5h = QFont("Cantarell", 13, QFont.Weight.Bold)
         self._font_value_7d = QFont("Cantarell", 9, QFont.Weight.DemiBold)
         self._font_reset = QFont("Cantarell", 8)
         self._font_reset_hot = QFont("Cantarell", 8, QFont.Weight.Bold)
@@ -109,7 +111,17 @@ class DongleWidget(QWidget):
                               f"Plano: {u['plan']} | Email: {u['email']}")
 
             self._s_pct = u.get("pct_5h")
-            self._w_pct = u.get("pct_7d", u["pct"])
+            # Semanal geral e semanal por modelo (ex. Fable) são limites
+            # distintos: o dongle mostra os dois
+            breakdown = u.get("weekly_breakdown") or []
+            w_all = next((w.get("pct") for w in breakdown
+                          if w.get("kind") == "weekly_all"), None)
+            scoped = [w for w in breakdown
+                      if w.get("kind") == "weekly_scoped" and w.get("pct") is not None]
+            top = max(scoped, key=lambda w: w["pct"]) if scoped else None
+            self._w_all = w_all if w_all is not None else u.get("pct_7d", u["pct"])
+            self._scoped_pct = top["pct"] if top else None
+            self._scoped_name = (top.get("model") or "modelo") if top else None
             self._stale = u.get("stale", False)
             self._source = u["source"]
             self._reset_5h = u.get("seconds_until_reset_5h")
@@ -138,44 +150,69 @@ class DongleWidget(QWidget):
         p.setPen(QPen(QColor("#3a3a3f"), 1))
         p.drawPath(body)
 
-        x7d = DONGLE_W - PAD - W7D
+        row = lambda x, w: QRectF(x, 4, w, 20)
 
-        p.setFont(self._font_label)
-        p.setPen(QPen(QColor(FG2)))
-        p.drawText(QRectF(PAD, 5, 60, 9),
-                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "5h")
-        p.drawText(QRectF(x7d, 5, W7D, 9),
-                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "7d")
+        # Mede os grupos da direita antes: a esquerda nunca pode invadi-los
+        def group_w(label, pct):
+            val = f"{pct:.0f}%" if pct is not None else "--"
+            return (QFontMetrics(self._font_label).horizontalAdvance(label) + 4 +
+                    QFontMetrics(self._font_value_7d).horizontalAdvance(val))
 
-        # Sessão (5h): a métrica dominante
+        right_w = group_w("7d", self._w_all)
+        if self._scoped_pct is not None:
+            right_w += 9 + group_w(self._scoped_name, self._scoped_pct)
+        left_max = DONGLE_W - PAD - right_w - 8
+
+        # Sessão (5h): a métrica dominante, à esquerda
         c5 = self._metric_color(self._s_pct)
         v5 = f"{self._s_pct:.0f}%" if self._s_pct is not None else "--"
+        x = PAD
+        p.setFont(self._font_label)
+        p.setPen(QPen(QColor(FG2)))
+        p.drawText(row(x, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "5h")
+        x += QFontMetrics(self._font_label).horizontalAdvance("5h") + 4
         p.setFont(self._font_value_5h)
         p.setPen(QPen(c5))
-        p.drawText(QRectF(PAD, 12, 70, 21),
-                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, v5)
+        p.drawText(row(x, 60), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, v5)
+        x += QFontMetrics(self._font_value_5h).horizontalAdvance(v5)
 
-        # Countdown do reset da sessão ao lado do valor; faltando pouco, destaca
-        if self._reset_5h is not None:
+        # Countdown do reset da sessão; faltando pouco, destaca
+        if self._reset_5h is not None and x + 5 < left_max:
             hot = self._reset_5h <= HOT_RESET_S and not self._stale
-            p.setFont(self._font_reset_hot if hot else self._font_reset)
+            reset_txt = _fmt_time(self._reset_5h)
+            f = self._font_reset_hot if hot else self._font_reset
+            p.setFont(f)
             p.setPen(QPen(QColor(FG3 if self._stale else (FG if hot else FG2))))
-            vw = QFontMetrics(self._font_value_5h).horizontalAdvance(v5)
-            p.drawText(QRectF(PAD + vw + 6, 12, x7d - PAD - vw - 10, 21),
-                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                       _fmt_time(self._reset_5h))
+            p.drawText(row(x + 5, left_max - x - 5),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, reset_txt)
+            x += 5 + min(QFontMetrics(f).horizontalAdvance(reset_txt), left_max - x - 5)
+        self._paint_bar(p, PAD, BAR_Y, min(x, left_max) - PAD, self._s_pct, c5)
 
-        # Semana (7d): secundária
-        c7 = self._metric_color(self._w_pct)
-        v7 = f"{self._w_pct:.0f}%" if self._w_pct is not None else "--"
-        p.setFont(self._font_value_7d)
-        p.setPen(QPen(c7))
-        p.drawText(QRectF(x7d, 14, W7D, 18),
-                   Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, v7)
-
-        self._paint_bar(p, PAD, 37, 66, self._s_pct, c5)
-        self._paint_bar(p, x7d, 37, W7D, self._w_pct, c7)
+        # Semanais à direita: por modelo (ex. Fable) e geral
+        right = DONGLE_W - PAD
+        if self._scoped_pct is not None:
+            right = self._draw_compact(p, right, self._scoped_name, self._scoped_pct)
+            right -= 9
+        self._draw_compact(p, right, "7d", self._w_all)
         p.end()
+
+    def _draw_compact(self, p, right, label, pct):
+        # Métrica secundária alinhada pela borda direita; devolve o x inicial
+        c = self._metric_color(pct)
+        val = f"{pct:.0f}%" if pct is not None else "--"
+        lw = QFontMetrics(self._font_label).horizontalAdvance(label)
+        vw = QFontMetrics(self._font_value_7d).horizontalAdvance(val)
+        x0 = right - (lw + 4 + vw)
+        r = QRectF(x0, 4, lw + 4 + vw + 2, 20)
+        p.setFont(self._font_label)
+        p.setPen(QPen(QColor(FG2)))
+        p.drawText(r, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, label)
+        p.setFont(self._font_value_7d)
+        p.setPen(QPen(c))
+        p.drawText(QRectF(x0 + lw + 4, 4, vw + 2, 20),
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, val)
+        self._paint_bar(p, x0, BAR_Y, lw + 4 + vw, pct, c)
+        return x0
 
     def _metric_color(self, pct):
         # Cinza quando stale: dado velho nunca deve parecer vivo
