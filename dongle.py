@@ -7,16 +7,16 @@ from PyQt6.QtGui import (QPainter, QColor, QBrush, QPen, QFont, QFontMetrics,
 
 import monitor, config, notifier
 from utils import (color as _color, fmt_time as _fmt_time,
-                   FG2, FG3, ACCENT)
+                   FG, FG2, FG3, ACCENT)
 
 SENT_PATH = str(config.CONFIG_DIR / "sent_thresholds.json")
 
-DONGLE_W, DONGLE_H = 136, 44
-DONGLE_R = 22
+DONGLE_W, DONGLE_H = 150, 46
+DONGLE_R = 23
 PAD = 16
-COL_GAP = 10
-COL_W = (DONGLE_W - 2 * PAD - COL_GAP) // 2
+W7D = 34  # coluna secundária (semana)
 CLICK_SLOP = 8  # px manhattan: abaixo disso o release conta como clique
+HOT_RESET_S = 30 * 60  # sessão resetando em menos que isso: countdown ganha destaque
 
 
 class DongleWidget(QWidget):
@@ -56,8 +56,10 @@ class DongleWidget(QWidget):
         self._hidden = False
 
         self._font_label = QFont("Cantarell", 7)
-        self._font_value = QFont("Cantarell", 10, QFont.Weight.Bold)
-        self._font_small = QFont("Cantarell", 7)
+        self._font_value_5h = QFont("Cantarell", 14, QFont.Weight.Bold)
+        self._font_value_7d = QFont("Cantarell", 9, QFont.Weight.DemiBold)
+        self._font_reset = QFont("Cantarell", 8)
+        self._font_reset_hot = QFont("Cantarell", 8, QFont.Weight.Bold)
 
         self._setup_timer()
         self.show()
@@ -138,54 +140,69 @@ class DongleWidget(QWidget):
         p.setPen(QPen(QColor("#3a3a3f"), 1))
         p.drawPath(body)
 
-        self._paint_metric(p, PAD, "5h", self._s_pct)
-        self._paint_metric(p, PAD + COL_W + COL_GAP, "7d", self._w_pct,
-                           scoped=bool(self._scope_7d))
+        x7d = DONGLE_W - PAD - W7D
 
-        secs = [s for s in (self._reset_5h, self._reset_w) if s is not None]
-        if secs:
-            p.setFont(self._font_small)
-            p.setPen(QPen(QColor(FG3 if self._stale else FG2)))
-            p.drawText(QRectF(0, 30, DONGLE_W, 12),
-                       Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
-                       "⟳ " + _fmt_time(min(secs)))
-
-        p.end()
-
-    def _paint_metric(self, p, x, label, pct, scoped=False):
-        # Cinza quando stale: dado velho nunca deve parecer vivo
-        if pct is None:
-            val, c = "--", QColor(FG3)
-        elif self._stale:
-            val, c = f"{pct:.0f}%", QColor(FG3)
-        else:
-            val, c = f"{pct:.0f}%", QColor(_color(pct))
-
-        row = QRectF(x, 5, COL_W, 18)
         p.setFont(self._font_label)
         p.setPen(QPen(QColor(FG2)))
-        p.drawText(row, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom, label)
-        if scoped:
+        p.drawText(QRectF(PAD, 5, 60, 9),
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "5h")
+        p.drawText(QRectF(x7d, 5, W7D, 9),
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "7d")
+        if self._scope_7d:
             # Ponto discreto: o 7d exibido é o limite por modelo (pct_7d_scope)
-            lw = QFontMetrics(self._font_label).horizontalAdvance(label)
+            lw = QFontMetrics(self._font_label).horizontalAdvance("7d")
             dot = QColor(ACCENT)
             dot.setAlpha(200)
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(dot)
-            p.drawEllipse(QRectF(x + lw + 2, 13.5, 3, 3))
-        p.setFont(self._font_value)
-        p.setPen(QPen(c))
-        p.drawText(row, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom, val)
+            p.drawEllipse(QRectF(x7d + lw + 2, 7.5, 3, 3))
 
+        # Sessão (5h): a métrica dominante
+        c5 = self._metric_color(self._s_pct)
+        v5 = f"{self._s_pct:.0f}%" if self._s_pct is not None else "--"
+        p.setFont(self._font_value_5h)
+        p.setPen(QPen(c5))
+        p.drawText(QRectF(PAD, 12, 70, 21),
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, v5)
+
+        # Countdown do reset da sessão ao lado do valor; faltando pouco, destaca
+        if self._reset_5h is not None:
+            hot = self._reset_5h <= HOT_RESET_S and not self._stale
+            p.setFont(self._font_reset_hot if hot else self._font_reset)
+            p.setPen(QPen(QColor(FG3 if self._stale else (FG if hot else FG2))))
+            vw = QFontMetrics(self._font_value_5h).horizontalAdvance(v5)
+            p.drawText(QRectF(PAD + vw + 6, 12, x7d - PAD - vw - 10, 21),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                       "⟳ " + _fmt_time(self._reset_5h))
+
+        # Semana (7d): secundária
+        c7 = self._metric_color(self._w_pct)
+        v7 = f"{self._w_pct:.0f}%" if self._w_pct is not None else "--"
+        p.setFont(self._font_value_7d)
+        p.setPen(QPen(c7))
+        p.drawText(QRectF(x7d, 14, W7D, 18),
+                   Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, v7)
+
+        self._paint_bar(p, PAD, 37, 66, self._s_pct, c5)
+        self._paint_bar(p, x7d, 37, W7D, self._w_pct, c7)
+        p.end()
+
+    def _metric_color(self, pct):
+        # Cinza quando stale: dado velho nunca deve parecer vivo
+        if pct is None or self._stale:
+            return QColor(FG3)
+        return QColor(_color(pct))
+
+    def _paint_bar(self, p, x, y, w, pct, c):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(255, 255, 255, 22))
         track = QPainterPath()
-        track.addRoundedRect(QRectF(x, 27, COL_W, 2.5), 1.25, 1.25)
+        track.addRoundedRect(QRectF(x, y, w, 2.5), 1.25, 1.25)
         p.drawPath(track)
         if pct:
             fill = QPainterPath()
-            fill_w = max(2.5, COL_W * min(pct, 100) / 100)
-            fill.addRoundedRect(QRectF(x, 27, fill_w, 2.5), 1.25, 1.25)
+            fill_w = max(2.5, w * min(pct, 100) / 100)
+            fill.addRoundedRect(QRectF(x, y, fill_w, 2.5), 1.25, 1.25)
             p.setBrush(c)
             p.drawPath(fill)
 
