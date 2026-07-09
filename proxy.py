@@ -50,7 +50,7 @@ def stop():
 
 def pkill_mitm():
     try:
-        subprocess.run(["pkill", "-9", "-f", "mitmdump"], capture_output=True, timeout=3)
+        subprocess.run(["pkill", "-9", "-f", "mitmdump.*mitm_addon.py"], capture_output=True, timeout=3)
     except:
         pass
 

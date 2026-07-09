@@ -18,15 +18,16 @@ def cmd_status():
 def cmd_notify():
     state = config.load()
     u = monitor.calc_usage(state)
-    notifier.check_thresholds(u, state, SENT_PATH)
-    print("Notification sent")
+    if notifier.check_thresholds(u, state, SENT_PATH):
+        print("Notification sent")
+    else:
+        print("No threshold crossed")
 
 
 def cmd_tray():
     state = config.load()
     if state.get("proxy_enabled"):
         proxy.start()
-        monitor.try_enable_claude_proxy()
         def proxy_monitor_loop():
             while True:
                 if not proxy.is_running():
@@ -47,11 +48,13 @@ def cmd_config():
 
 def cmd_wrapper():
     state = config.load()
-    print("Export these env vars before running Claude Code:")
-    print(f"  export NODE_EXTRA_CA_CERTS=$HOME/.mitmproxy/mitmproxy-ca-cert.pem")
+    print("Modo proxy: OPCIONAL e legado. O rastreamento normal já funciona")
+    print("sem proxy nem wrapper (API OAuth oficial, token local do Claude Code).")
+    print("Se ainda assim quiser o fallback via mitmproxy, exporte antes de rodar:")
+    print("  export NODE_EXTRA_CA_CERTS=$HOME/.mitmproxy/mitmproxy-ca-cert.pem")
     print(f"  export HTTPS_PROXY=http://localhost:{state.get('proxy_port', 8081)}")
     print(f"  export HTTP_PROXY=http://localhost:{state.get('proxy_port', 8081)}")
-    print("Or use: claude-wrapper.sh")
+    print("Ou use: claude-wrapper.sh (exige proxy_enabled: true no config)")
 
 
 def main():
