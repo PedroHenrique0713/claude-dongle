@@ -13,7 +13,7 @@ import json, os, threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import history
+from . import history
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 _lock = threading.Lock()  # serializa refreshes: dois em paralelo recontariam

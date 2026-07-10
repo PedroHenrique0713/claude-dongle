@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-monitor"
+version = "1.0.0"
+description = "Monitor de rate limit do Claude Code: dongle flutuante + painel (burn rate, previsão de estouro, uso por projeto)."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["PyQt6>=6.5"]
+
+[project.urls]
+Repository = "https://github.com/PedroHenrique0713/claude-monitor"
+
+[project.scripts]
+claude-monitor = "claude_monitor.main:main"
+
+[tool.setuptools]
+packages = ["claude_monitor"]

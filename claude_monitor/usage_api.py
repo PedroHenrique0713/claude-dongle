@@ -2,7 +2,7 @@ import json, time, urllib.request, urllib.error
 from datetime import datetime
 from pathlib import Path
 
-import config
+from . import config
 
 CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"

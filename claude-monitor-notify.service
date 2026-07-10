@@ -1,7 +1,0 @@
-[Unit]
-Description=Claude Code usage monitor — checagem de limites (notificação)
-After=graphical-session.target
-
-[Service]
-Type=oneshot
-ExecStart=%h/Documentos/VS/claude-monitor/run.sh notify

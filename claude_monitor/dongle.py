@@ -5,8 +5,8 @@ from PyQt6.QtCore import Qt, QTimer, QRectF
 from PyQt6.QtGui import (QPainter, QColor, QBrush, QPen, QFont, QFontMetrics,
                          QLinearGradient, QPainterPath, QRegion)
 
-import monitor, config, notifier, usage_api
-from utils import (color as _color, fmt_time as _fmt_time,
+from . import monitor, config, notifier, usage_api
+from .utils import (color as _color, fmt_time as _fmt_time,
                    FG, FG2, FG3, ORANGE, RED, UI_FONT)
 
 SENT_PATH = str(config.CONFIG_DIR / "sent_thresholds.json")
@@ -431,7 +431,7 @@ class DongleWidget(QWidget):
             except RuntimeError:
                 self._dash = None
         try:
-            from dashboard_ui import DashboardWidget
+            from .dashboard_ui import DashboardWidget
             d = DashboardWidget(self.cfg, dongle=self)
             d.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
             d.destroyed.connect(self._clear_dash)

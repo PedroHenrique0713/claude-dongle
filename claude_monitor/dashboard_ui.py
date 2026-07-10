@@ -2,8 +2,8 @@ import os, sys, time, threading
 if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
-import monitor, config, history, projects
-from utils import (color, fmt_time, RED, GREEN, BG, BG2, BG3, FG, FG2, FG3, SEP,
+from . import monitor, config, history, projects
+from .utils import (color, fmt_time, RED, GREEN, BG, BG2, BG3, FG, FG2, FG3, SEP,
                    ACCENT, ACCENT2, SURFACE, SURFACE_HI, UI_FONT, UI_FONT_STACK)
 
 
