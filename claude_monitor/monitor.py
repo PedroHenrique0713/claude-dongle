@@ -3,8 +3,8 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
-import history
-import usage_api
+from . import history
+from . import usage_api
 
 CLAUDE_JSON = Path.home() / ".claude" / ".claude.json"
 _prev_identity = None

@@ -1,6 +1,6 @@
 import subprocess, json, time, sys, os
 from pathlib import Path
-from utils import fmt_time as _fmt_time
+from .utils import fmt_time as _fmt_time
 
 
 def _win_toast(title, message):

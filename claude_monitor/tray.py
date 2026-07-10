@@ -8,7 +8,7 @@ if sys.platform.startswith("linux"):
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import QApplication
 
-from utils import UI_FONT
+from .utils import UI_FONT
 
 _app = None
 
@@ -25,7 +25,7 @@ def get_app():
 
 def run(cfg):
     app = get_app()
-    from dongle import DongleWidget
+    from .dongle import DongleWidget
     w = DongleWidget(cfg)
     app.exec()
 
@@ -35,7 +35,7 @@ class Dashboard:
 
     def __init__(self, cfg):
         get_app()
-        from dashboard_ui import DashboardWidget
+        from .dashboard_ui import DashboardWidget
         self.root = DashboardWidget(cfg)
 
     def run(self):

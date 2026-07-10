@@ -8,7 +8,7 @@ primeiro INSERT entra. WAL + busy_timeout cobrem o multi-processo
 """
 import sqlite3, time, threading
 
-import config
+from . import config
 
 DB_PATH = config.CONFIG_DIR / "history.db"
 MIN_RATE_PPH = 0.2  # abaixo disso o ritmo é "estável": ETA seria ruído
