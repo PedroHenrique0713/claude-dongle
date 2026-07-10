@@ -5,8 +5,6 @@ CONFIG_DIR = Path.home() / ".config" / "claude-monitor"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 
 DEFAULTS = {
-    "weekly_limit": 500000,
-    "auto_adjust_limit": True,
     "reset_day": "thursday",
     "reset_time": "18:00",
     "reset_timezone": "America/Sao_Paulo",
@@ -14,16 +12,21 @@ DEFAULTS = {
     "thresholds": [50, 70, 85, 95],
     "notify_on_threshold": True,
     "notify_on_limit": True,
+    "telemetry_stale_minutes": 60,  # sem dado novo por X min → avisa uma vez
     "claude_dir": str(Path.home() / ".claude"),
-    "log_token_source": "jsonl",
     "dongle_opacity": 0.85,
     "dongle_always_on_top": True,
+    "dongle_pos": None,  # [x, y] global da última posição arrastada (null = canto padrão)
     "show_mode": "dev",
     "idle_quit_minutes": 10,  # escondido por X min → o serviço se encerra (0 = nunca)
     "show_processes": ["code", "gnome-terminal", "ptyxis", "claude"],
-    "proxy_enabled": False,
-    "proxy_port": 8081,
     "api_poll_interval": 300,  # o endpoint de usage rate-limita polling agressivo
+    "history_retention_days": 21,  # série temporal do burn rate (GC ao iniciar)
+    "burn_lookback_minutes": 60,   # janela da regressão do burn rate
+    "burn_min_points": 3,          # pontos mínimos para exibir previsão
+    "forecast_notify": True,       # notificar estouro previsto antes do reset
+    "forecast_expanded": False,    # seção Previsão no dashboard começa recolhida
+    "projects_expanded": False,    # seção "Por projeto" no dashboard começa recolhida
 }
 
 

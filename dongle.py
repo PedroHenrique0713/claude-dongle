@@ -1,15 +1,16 @@
-import subprocess
+import subprocess, time, math, sys
 
 from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtCore import Qt, QTimer, QRectF
 from PyQt6.QtGui import (QPainter, QColor, QBrush, QPen, QFont, QFontMetrics,
                          QLinearGradient, QPainterPath, QRegion)
 
-import monitor, config, notifier
+import monitor, config, notifier, usage_api
 from utils import (color as _color, fmt_time as _fmt_time,
-                   FG, FG2, FG3)
+                   FG, FG2, FG3, ORANGE, RED, UI_FONT)
 
 SENT_PATH = str(config.CONFIG_DIR / "sent_thresholds.json")
+TELEMETRY_PATH = str(config.CONFIG_DIR / "telemetry_state.json")
 
 DONGLE_W, DONGLE_H = 216, 36
 DONGLE_R = 18
@@ -21,7 +22,24 @@ VIS_CHECK_MS = 5000  # gatilho de visibilidade (abrir/fechar terminal reage ráp
 
 # comm dos processos que caracterizam "trabalhando em dev" (modo show_mode=dev)
 DEV_PROCS = ["code", "cursor", "ptyxis", "gnome-terminal", "kgx", "konsole",
-             "alacritty", "kitty", "wezterm", "tilix"]
+             "alacritty", "kitty", "wezterm", "tilix", "windowsterminal",
+             "iterm", "terminal"]
+
+
+def _list_processes():
+    """Nomes de processos rodando, em minúsculo. Vazio se indisponível.
+    Cross-platform: tasklist no Windows, ps no Linux/macOS."""
+    try:
+        if sys.platform == "win32":
+            out = subprocess.check_output(
+                ["tasklist", "/fo", "csv", "/nh"], text=True, timeout=3)
+            return [ln.split('","')[0].lstrip('"').lower()
+                    for ln in out.splitlines() if ln]
+        out = subprocess.check_output(["ps", "-eo", "comm="], text=True, timeout=3)
+        # comm pode vir com caminho no macOS: fica só com o basename
+        return [l.strip().rsplit("/", 1)[-1].lower() for l in out.splitlines()]
+    except Exception:
+        return []
 
 
 class DongleWidget(QWidget):
@@ -42,8 +60,7 @@ class DongleWidget(QWidget):
         self.setWindowOpacity(self.cfg.get("dongle_opacity", 0.85))
         self._apply_mask()
 
-        screen = QApplication.primaryScreen().geometry()
-        self.move(screen.width() - DONGLE_W - 12, 36)
+        self._restore_position()
 
         self._press_pos = None    # posição global do press; imutável durante o move
         self._move_anchor = None  # âncora do arrasto; esta sim é atualizada
@@ -59,14 +76,19 @@ class DongleWidget(QWidget):
         self._source = "none"
         self._reset_5h = None
         self._reset_w = None
+        self._reset_5h_epoch = None  # epoch p/ countdown ao vivo (recomputado no paint)
+        self._reset_w_epoch = None
+        self._overflow = False    # algum balde com previsão de estouro antes do reset
+        self._critical = False    # algum pct >= 95: borda pulsa
         self._hidden = False
         self._idle_secs = 0
+        self._ps_cache = None     # (t_monotonic, visible) p/ não rodar ps 2x/5s
 
-        self._font_label = QFont("Cantarell", 7)
-        self._font_value_5h = QFont("Cantarell", 13, QFont.Weight.Bold)
-        self._font_value_7d = QFont("Cantarell", 9, QFont.Weight.DemiBold)
-        self._font_reset = QFont("Cantarell", 8)
-        self._font_reset_hot = QFont("Cantarell", 8, QFont.Weight.Bold)
+        self._font_label = QFont(UI_FONT, 7)
+        self._font_value_5h = QFont(UI_FONT, 13, QFont.Weight.Bold)
+        self._font_value_7d = QFont(UI_FONT, 9, QFont.Weight.DemiBold)
+        self._font_reset = QFont(UI_FONT, 8)
+        self._font_reset_hot = QFont(UI_FONT, 8, QFont.Weight.Bold)
 
         self._setup_timer()
         self.show()
@@ -77,6 +99,24 @@ class DongleWidget(QWidget):
         path.addRoundedRect(QRectF(0, 0, DONGLE_W, DONGLE_H), DONGLE_R, DONGLE_R)
         self.setMask(QRegion(path.toFillPolygon().toPolygon()))
 
+    def _pos_on_screen(self, x, y):
+        # a posição arrastada precisa cair (com folga visível) em alguma tela
+        # conectada — senão o dongle sumiria fora da área após trocar de monitor
+        for s in QApplication.screens():
+            g = s.geometry()
+            if g.left() <= x <= g.right() - 40 and g.top() <= y <= g.bottom() - 20:
+                return True
+        return False
+
+    def _restore_position(self):
+        pos = self.cfg.get("dongle_pos")
+        if isinstance(pos, (list, tuple)) and len(pos) == 2 and \
+                self._pos_on_screen(pos[0], pos[1]):
+            self.move(int(pos[0]), int(pos[1]))
+            return
+        screen = QApplication.primaryScreen().geometry()
+        self.move(screen.left() + screen.width() - DONGLE_W - 12, screen.top() + 36)
+
     def _setup_timer(self):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.poll)
@@ -85,7 +125,16 @@ class DongleWidget(QWidget):
         self._vis_timer = QTimer(self)
         self._vis_timer.timeout.connect(self._tick_visibility)
         self._vis_timer.start(VIS_CHECK_MS)
+        # Animação: countdown ao vivo (1s) e pulso da borda quando crítico (~90ms,
+        # ajustado no poll conforme o estado)
+        self._anim_timer = QTimer(self)
+        self._anim_timer.timeout.connect(self._on_anim)
+        self._anim_timer.start(1000)
         self.poll()
+
+    def _on_anim(self):
+        if not self._hidden:
+            self.update()
 
     def _tick_visibility(self):
         was_hidden = self._hidden
@@ -106,22 +155,29 @@ class DongleWidget(QWidget):
                 print(f"[dongle] idle há {quit_min}min sem dev tools — encerrando", flush=True)
                 QApplication.quit()
 
-    def _update_display(self):
-        visible = True
+    def _compute_visible(self):
         mode = self.cfg.get("show_mode", "always")
-        if mode != "always":
-            names = {"claude": ["claude"], "dev": DEV_PROCS,
-                     "custom": self.cfg.get("show_processes", [])}.get(mode, [])
-            visible = False
-            if names:
-                try:
-                    out = subprocess.check_output(["ps", "-eo", "comm="], text=True, timeout=3)
-                    # comm trunca em 15 chars → prefixo por linha; nunca substring
-                    # no blob inteiro ("code" casaria com "opencode")
-                    lines = [l.strip() for l in out.splitlines()]
-                    visible = any(l.startswith(n) for l in lines for n in names)
-                except Exception:
-                    pass
+        if mode == "always":
+            return True
+        # poll (dados) e _vis_timer chamam a cada 5s cada; cachear o ps por 4s
+        # evita rodar o subprocess duas vezes por ciclo.
+        now = time.monotonic()
+        if self._ps_cache and now - self._ps_cache[0] < 4:
+            return self._ps_cache[1]
+        names = {"claude": ["claude"], "dev": DEV_PROCS,
+                 "custom": self.cfg.get("show_processes", [])}.get(mode, [])
+        visible = False
+        if names:
+            # match por prefixo (o comm do Linux trunca em 15 chars); nunca
+            # substring no blob inteiro ("code" casaria "opencode")
+            procs = _list_processes()
+            names = [n.lower() for n in names]
+            visible = any(p.startswith(n) for p in procs for n in names)
+        self._ps_cache = (now, visible)
+        return visible
+
+    def _update_display(self):
+        visible = self._compute_visible()
         if visible:
             if self._hidden:
                 self.show()
@@ -160,15 +216,48 @@ class DongleWidget(QWidget):
             self._source = u["source"]
             self._reset_5h = u.get("seconds_until_reset_5h")
             self._reset_w = u.get("seconds_until_reset")
+            self._reset_5h_epoch = u.get("reset_5h_epoch")
+            self._reset_w_epoch = u.get("reset_7d_epoch")
+            fcs = u.get("forecast") or {}
+            self._overflow = (not self._stale) and any(
+                v.get("overflow_before_reset") for v in fcs.values())
+            pcts = [p for p in (self._s_pct, self._w_all, self._scoped_pct)
+                    if p is not None]
+            self._critical = (not self._stale) and any(p >= 95 for p in pcts)
+            # pulso rápido só quando crítico/estouro; senão 1s só p/ o countdown
+            self._anim_timer.setInterval(
+                90 if (self._critical or self._overflow) else 1000)
+            self._update_tooltip()
 
             self.update()
 
+            notifier.check_telemetry(u, self.cfg, TELEMETRY_PATH)
             last = self._last_usage or {}
             if (u["pct"], u.get("pct_5h")) != (last.get("pct"), last.get("pct_5h")):
                 notifier.check_thresholds(u, self.cfg, SENT_PATH)
             self._last_usage = u
         except Exception:
             import traceback; traceback.print_exc()
+
+    def _live_secs(self, epoch, fallback):
+        # countdown ao vivo: recomputa do epoch se houver, senão usa o valor fixo
+        if epoch:
+            return max(0, int(epoch - time.time()))
+        return fallback
+
+    def _update_tooltip(self):
+        src = {"api": "API oficial", "none": "sem dado"}.get(self._source, self._source)
+        lines = [f"Fonte: {src}" + (" · dado antigo" if self._stale else "")]
+        if self._s_pct is not None:
+            lines.append(f"Sessão 5h: {self._s_pct:.0f}% · reinicia em {_fmt_time(self._reset_5h)}")
+        if self._w_all is not None:
+            lines.append(f"Semana geral: {self._w_all:.0f}% · reinicia em {_fmt_time(self._reset_w)}")
+        if self._scoped_pct is not None:
+            lines.append(f"Semana {self._scoped_name}: {self._scoped_pct:.0f}%")
+        if self._overflow:
+            lines.append("⚠ no ritmo atual, estoura antes do reset")
+        lines.append("clique: abrir painel · meio: atualizar agora")
+        self.setToolTip("\n".join(lines))
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -181,7 +270,15 @@ class DongleWidget(QWidget):
         bg.setColorAt(0.0, QColor("#26262a"))
         bg.setColorAt(1.0, QColor("#18181b"))
         p.setBrush(QBrush(bg))
-        p.setPen(QPen(QColor("#3a3a3f"), 1))
+        # Borda pulsante: vermelha quando algum limite passou de 95%, âmbar
+        # quando há previsão de estouro — aviso de relance sem poluir os 216×36.
+        if self._critical or self._overflow:
+            pulse = (math.sin(time.monotonic() * 5) + 1) / 2  # 0..1
+            edge = QColor(RED if self._critical else ORANGE)
+            edge.setAlpha(int(150 + 105 * pulse))
+            p.setPen(QPen(edge, 1.5 + 0.8 * pulse))
+        else:
+            p.setPen(QPen(QColor("#3a3a3f"), 1))
         p.drawPath(body)
 
         row = lambda x, w: QRectF(x, 4, w, 20)
@@ -210,10 +307,11 @@ class DongleWidget(QWidget):
         p.drawText(row(x, 60), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, v5)
         x += QFontMetrics(self._font_value_5h).horizontalAdvance(v5)
 
-        # Countdown do reset da sessão; faltando pouco, destaca
-        if self._reset_5h is not None and x + 5 < left_max:
-            hot = self._reset_5h <= HOT_RESET_S and not self._stale
-            reset_txt = _fmt_time(self._reset_5h)
+        # Countdown do reset da sessão (ao vivo: recomputa do epoch a cada paint)
+        reset_5h = self._live_secs(self._reset_5h_epoch, self._reset_5h)
+        if reset_5h is not None and x + 5 < left_max:
+            hot = reset_5h <= HOT_RESET_S and not self._stale
+            reset_txt = _fmt_time(reset_5h)
             f = self._font_reset_hot if hot else self._font_reset
             p.setFont(f)
             p.setPen(QPen(QColor(FG3 if self._stale else (FG if hot else FG2))))
@@ -288,12 +386,41 @@ class DongleWidget(QWidget):
             return
         moved = (event.globalPosition().toPoint() - self._press_pos).manhattanLength()
         was_drag = self._dragging or moved >= CLICK_SLOP
+        dragged = self._dragging  # só o botão esquerdo seta _dragging no move
         self._press_pos = None
         self._dragging = False
+        if dragged:  # arrasto real: gruda na borda e persiste (sobrevive ao idle-kill)
+            self._snap_to_edge()
+            pos = self.pos()
+            self.cfg["dongle_pos"] = [pos.x(), pos.y()]
+            config.save(self.cfg)
+            return
         if was_drag:
             return
-        if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._force_refresh()
+        elif event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
             self._open_dashboard()
+
+    def _snap_to_edge(self):
+        # Arrastou pra perto de uma borda da tela atual → gruda no canto.
+        SNAP, M = 26, 10
+        scr = (self.screen() or QApplication.primaryScreen()).geometry()
+        x, y = self.x(), self.y()
+        if abs(x - scr.left()) < SNAP:
+            x = scr.left() + M
+        elif abs((x + DONGLE_W) - scr.right()) < SNAP:
+            x = scr.right() - DONGLE_W - M
+        if abs(y - scr.top()) < SNAP:
+            y = scr.top() + M
+        elif abs((y + DONGLE_H) - scr.bottom()) < SNAP:
+            y = scr.bottom() - DONGLE_H - M
+        self.move(x, y)
+
+    def _force_refresh(self):
+        # Clique do meio: ignora o cache e busca dado fresco na hora.
+        usage_api.invalidate()
+        self.poll()
 
     def _open_dashboard(self):
         if self._dash is not None:

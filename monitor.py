@@ -3,36 +3,11 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
+import history
 import usage_api
 
 CLAUDE_JSON = Path.home() / ".claude" / ".claude.json"
-PROXY_STATE = Path("/tmp/claude-monitor-proxy.json")
 _prev_identity = None
-
-def read_jobs(claude_dir: str) -> list[dict]:
-    jobs_dir = Path(claude_dir) / "jobs"
-    if not jobs_dir.exists():
-        return []
-    jobs = []
-    for job_dir in sorted(jobs_dir.iterdir()):
-        if not job_dir.is_dir():
-            continue
-        state_file = job_dir / "state.json"
-        if not state_file.exists():
-            continue
-        try:
-            data = json.loads(state_file.read_text())
-            jobs.append({
-                "id": job_dir.name,
-                "state": data.get("state", "unknown"),
-                "tokens": data.get("tokens", 0),
-                "name": data.get("name", ""),
-                "created_at": data.get("createdAt", ""),
-                "updated_at": data.get("updatedAt", ""),
-            })
-        except (json.JSONDecodeError, KeyError):
-            continue
-    return jobs
 
 def read_sessions(claude_dir: str) -> list[dict]:
     sess_dir = Path(claude_dir) / "sessions"
@@ -97,22 +72,16 @@ def calc_usage(state: dict) -> dict:
     account = get_account_identity()
     account_changed, _ = detect_account_change()
 
-    api_data = usage_api.fetch(state.get("api_poll_interval", 60))
-
-    proxy_data = None
-    if PROXY_STATE.exists():
-        try:
-            pd = json.loads(PROXY_STATE.read_text())
-            if now_ts - pd.get("_updated_at", 0) < 600:
-                proxy_data = pd
-        except (json.JSONDecodeError, OSError):
-            pass
+    # Passa a conta atual para o cache não servir uso de outra conta ao trocar.
+    api_data = usage_api.fetch(state.get("api_poll_interval", 60),
+                               account=account.get("uuid"))
 
     stale = False
     scope_7d = None
     weekly_breakdown = None
     reset_7d_epoch = None
     reset_5h_epoch = None
+    data_ts = None
 
     if api_data and api_data.get("pct_7d") is not None:
         pct_7d = round(api_data["pct_7d"], 1)
@@ -128,29 +97,16 @@ def calc_usage(state: dict) -> dict:
         stale = api_data.get("stale", False)
         scope_7d = api_data.get("pct_7d_scope")
         weekly_breakdown = api_data.get("weekly_breakdown")
-        proxy_age = api_data.get("age_seconds")
+        stale_age = api_data.get("age_seconds")
         overage = "enabled" if api_data.get("overage_enabled") else None
-    elif proxy_data and "pct_7d" in proxy_data:
-        pct_7d = round(proxy_data["pct_7d"] * 100, 1)
-        pct_5h = round(proxy_data.get("pct_5h", 0) * 100, 1)
-        reset_7d_epoch = proxy_data.get("reset_7d") or None
-        reset_5h_epoch = proxy_data.get("reset_5h") or None
-        if reset_7d_epoch:
-            next_reset = datetime.fromtimestamp(reset_7d_epoch, tz=timezone.utc)
-            seconds_until_reset = int((next_reset - now).total_seconds())
-        if reset_5h_epoch:
-            reset_5h = datetime.fromtimestamp(reset_5h_epoch, tz=timezone.utc)
-            seconds_until_reset_5h = max(0, int((reset_5h - now).total_seconds()))
-        source = "proxy"
-        proxy_age = int(now_ts - proxy_data["_updated_at"])
-        overage = proxy_data.get("overage_status", "")
+        data_ts = api_data.get("fetched_at")
     else:
-        # Sem fonte real (API e proxy indisponíveis, sem cache): mostrar "--".
+        # Sem fonte real (API indisponível, sem cache): mostrar "--".
         # Número inventado na tela é pior que nenhum número.
         pct_7d = None
         pct_5h = None
         overage = None
-        proxy_age = None
+        stale_age = None
         source = "none"
 
     active_sessions = [s for s in sessions if s["status"] == "busy"]
@@ -174,15 +130,25 @@ def calc_usage(state: dict) -> dict:
         "seconds_until_reset_5h": seconds_until_reset_5h,
         "reset_7d_epoch": reset_7d_epoch,
         "reset_5h_epoch": reset_5h_epoch,
+        "data_ts": int(data_ts) if data_ts else None,
     }
     if scope_7d and scope_7d != "all":
         result["pct_7d_scope"] = scope_7d
     if weekly_breakdown:
         result["weekly_breakdown"] = weekly_breakdown
-    if proxy_age is not None:
-        result["proxy_age_seconds"] = proxy_age
+    if stale_age is not None:
+        result["stale_age_seconds"] = stale_age
     if overage:
         result["overage_status"] = overage
+    # Histórico/previsão jamais derrubam o funil de uso.
+    try:
+        history.record(result)
+        fc = history.attach_forecasts(result, state)
+        if fc:
+            result["forecast"] = fc
+    except Exception:
+        import traceback
+        traceback.print_exc()
     return result
 
 def _last_reset(day: str, time_str: str, tz_name: str) -> datetime:

@@ -1,9 +1,14 @@
-import os
-# XCB forçado: PyQt6 em Wayland nativo quebra posicionamento de janelas
-# frameless neste setup. Precisa estar setado antes do primeiro import de PyQt6.
-os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+import os, sys
+# XCB só no Linux: PyQt6 em Wayland nativo quebra o posicionamento de janelas
+# frameless. Em Windows/macOS a plataforma nativa é a correta — forçar xcb lá
+# impediria o app de abrir. Setar antes do primeiro import de PyQt6.
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
+from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import QApplication
+
+from utils import UI_FONT
 
 _app = None
 
@@ -14,6 +19,7 @@ def get_app():
         _app = QApplication([])
         _app.setQuitOnLastWindowClosed(False)
         _app.setStyle("Fusion")
+        _app.setFont(QFont(UI_FONT, 10))  # fonte de UI da plataforma
     return _app
 
 
