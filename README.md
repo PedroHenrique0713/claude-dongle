@@ -36,6 +36,12 @@ Uma pílula flutuante que mostra quanto você já queimou das janelas de uso —
   </tr>
 </table>
 
+<div align="center">
+  <img src="docs/notificacoes.png" alt="notificações" width="420">
+  <br>
+  <em>Avisos de limite e previsão de estouro — funcionam mesmo com o dongle fechado</em>
+</div>
+
 ## Instalação
 
 Requisitos: **Python 3.9+** e o **Claude Code** instalado e logado na máquina.
