@@ -1,7 +1,7 @@
-import subprocess, time, math, sys
+import subprocess, time, math, sys, os
 
 from PyQt6.QtWidgets import QApplication, QWidget
-from PyQt6.QtCore import Qt, QTimer, QRectF
+from PyQt6.QtCore import Qt, QTimer, QRectF, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import (QPainter, QColor, QBrush, QPen, QFont, QFontMetrics,
                          QLinearGradient, QPainterPath, QRegion)
 
@@ -19,6 +19,7 @@ BAR_Y = 27.0
 CLICK_SLOP = 8  # px manhattan: abaixo disso o release conta como clique
 HOT_RESET_S = 30 * 60  # sessão resetando em menos que isso: countdown ganha destaque
 VIS_CHECK_MS = 5000  # gatilho de visibilidade (abrir/fechar terminal reage rápido)
+_ANIMATE = os.environ.get("QT_QPA_PLATFORM") != "offscreen"  # sem animar em headless
 
 # comm dos processos que caracterizam "trabalhando em dev" (modo show_mode=dev)
 DEV_PROCS = ["code", "cursor", "ptyxis", "gnome-terminal", "kgx", "konsole",
@@ -90,9 +91,24 @@ class DongleWidget(QWidget):
         self._font_reset = QFont(UI_FONT, 8)
         self._font_reset_hot = QFont(UI_FONT, 8, QFont.Weight.Bold)
 
+        self._fade = QPropertyAnimation(self, b"windowOpacity", self)
+        self._fade.setDuration(260)
+        self._fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+
         self._setup_timer()
         self.show()
+        if _ANIMATE:
+            self._start_fade_in()
         self.raise_()
+
+    def _start_fade_in(self):
+        # surge suave: opacidade de 0 até a configurada (entrada e reaparição)
+        target = self.cfg.get("dongle_opacity", 0.85)
+        self._fade.stop()
+        self.setWindowOpacity(0.0)
+        self._fade.setStartValue(0.0)
+        self._fade.setEndValue(target)
+        self._fade.start()
 
     def _apply_mask(self):
         path = QPainterPath()
@@ -182,6 +198,8 @@ class DongleWidget(QWidget):
             if self._hidden:
                 self.show()
                 self._hidden = False
+                if _ANIMATE:
+                    self._start_fade_in()  # reapareceu (terminal aberto): surge suave
         else:
             if not self._hidden:
                 self.hide()
@@ -193,7 +211,9 @@ class DongleWidget(QWidget):
             if self._hidden:
                 return  # sem dev tools abertos: não gasta chamada de API
             # cfg é compartilhado com o Dashboard: reaplica o que muda ao vivo
-            self.setWindowOpacity(self.cfg.get("dongle_opacity", 0.85))
+            # (mas não durante o fade-in, senão saltaria pra opacidade final)
+            if self._fade.state() != QPropertyAnimation.State.Running:
+                self.setWindowOpacity(self.cfg.get("dongle_opacity", 0.85))
             u = monitor.calc_usage(self.cfg)
 
             if u.get("account_changed"):

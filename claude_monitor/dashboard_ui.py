@@ -16,7 +16,8 @@ def _fmt_tokens(n):
 
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
                              QHBoxLayout, QFrame, QPushButton, QSizePolicy,
-                             QSlider, QRadioButton, QButtonGroup, QLineEdit)
+                             QSlider, QRadioButton, QButtonGroup, QLineEdit,
+                             QGraphicsOpacityEffect)
 from PyQt6.QtCore import (Qt, QTimer, QRectF, QPointF, pyqtProperty,
                           QPropertyAnimation, QEasingCurve)
 from PyQt6.QtGui import (QPainter, QColor, QBrush, QFont, QFontMetrics, QPen,
@@ -585,6 +586,21 @@ class DashboardWidget(QWidget):
         self.layout().activate()
         self.adjustSize()
 
+    def _fade_widget(self, w):
+        # fade de entrada da seção. O efeito é aplicado DEPOIS do _fit (que já
+        # resolveu o sizeHint com o container visível) e removido ao terminar —
+        # graphics effect presente durante o resize quebra a cascata no XCB.
+        eff = QGraphicsOpacityEffect(w)
+        w.setGraphicsEffect(eff)
+        anim = QPropertyAnimation(eff, b"opacity", self)
+        anim.setDuration(240)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.finished.connect(lambda: w.setGraphicsEffect(None))
+        anim.start()
+        self._disc_anim = anim  # mantém a referência viva até terminar
+
     def _toggle_forecast(self):
         self._fc_open = not self._fc_open
         self.fc_container.setVisible(self._fc_open)
@@ -592,6 +608,8 @@ class DashboardWidget(QWidget):
         self.cfg["forecast_expanded"] = self._fc_open
         config.save(self.cfg)
         self._fit()  # janela reencolhe/expande com o conteúdo
+        if self._fc_open and _ANIMATE:
+            self._fade_widget(self.fc_container)
 
     def _mini_label(self, text):
         l = QLabel(text)
@@ -611,6 +629,8 @@ class DashboardWidget(QWidget):
             self._kick_projects()
             self._render_projects()
         self._fit()
+        if self._pj_open and _ANIMATE:
+            self._fade_widget(self.pj_container)
 
     def _kick_projects(self):
         # o parse inicial pode levar ~8s: sempre em thread (o lock em
