@@ -1,4 +1,4 @@
-import os, sys, time, threading
+import os, sys, time, threading, math
 if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
@@ -15,11 +15,11 @@ def _fmt_tokens(n):
     return str(int(n))
 
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
-                             QHBoxLayout, QFrame, QPushButton,
+                             QHBoxLayout, QFrame, QPushButton, QSizePolicy,
                              QSlider, QRadioButton, QButtonGroup, QLineEdit)
 from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF
-from PyQt6.QtGui import (QPainter, QColor, QBrush, QFont, QPen, QPainterPath,
-                         QLinearGradient)
+from PyQt6.QtGui import (QPainter, QColor, QBrush, QFont, QFontMetrics, QPen,
+                         QPainterPath, QLinearGradient)
 
 REFRESH_MS = 5000
 TICK_MS = 1000          # countdown ao vivo (só recomputa textos de tempo)
@@ -157,68 +157,104 @@ class UsageBar(QWidget):
         p.end()
 
 
-class UsageRow(QWidget):
-    """Label + big percent + bar + reset countdown for one rate limit."""
+class UsageRing(QWidget):
+    """Medidor em anel: trilho + arco por severidade, um tick de RITMO (onde o
+    consumo estaria no linear), o % ao centro e label/subtexto embaixo. Largura
+    flexível: o raio encolhe sozinho quando há muitos anéis lado a lado."""
 
-    def __init__(self, label, compact=False, parent=None):
+    DIAM = 84
+    TH = 8
+
+    def __init__(self, label, parent=None):
         super().__init__(parent)
-        self._pct_size = 15 if compact else 22
-        box = QVBoxLayout(self)
-        box.setContentsMargins(0, 0, 0, 0)
-        box.setSpacing(5)
-
-        top = QHBoxLayout()
-        top.setContentsMargins(0, 0, 0, 0)
-        self.lbl = QLabel(label)
-        self.lbl.setStyleSheet(
-            f"color: {FG2}; font-size: {'11px' if compact else '12px'};")
-        top.addWidget(self.lbl, 0, Qt.AlignmentFlag.AlignBottom)
-        top.addStretch()
-        self.pct = QLabel("--")
-        self._set_pct_color(FG3)
-        top.addWidget(self.pct, 0, Qt.AlignmentFlag.AlignBottom)
-        box.addLayout(top)
-
-        self.bar = UsageBar()
-        box.addWidget(self.bar)
-
-        self.sub = QLabel("")
-        self.sub.setStyleSheet(f"color: {FG3}; font-size: 10px;")
-        self.sub.hide()
-        box.addWidget(self.sub)
-
-    def _set_pct_color(self, c):
-        self.pct.setStyleSheet(
-            f"color: {c}; font-size: {self._pct_size}px; font-weight: 700;")
+        self._label = label
+        self._pct = None
+        self._color = QColor(FG3)
+        self._pace = None
+        self._sub = ""
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumWidth(76)
+        self.setFixedHeight(self.DIAM + 46)
 
     def set_data(self, pct, seconds, stale, window_s=None):
+        self._pct = pct
         if pct is None:
-            self.pct.setText("--")
-            self._set_pct_color(FG3)
-            self.bar.set_value(None, FG3)
-            self.sub.hide()
+            self._color = QColor(FG3)
+            self._pace = None
+            self._sub = ""
+            self.update()
             return
-        c = FG3 if stale else color(pct)
+        self._color = QColor(FG3 if stale else color(pct))
         pace = None
         if window_s and seconds is not None:
             pace = max(0.0, min(1.0, 1 - seconds / window_s))
-        self.pct.setText(f"{pct:.0f}%")
-        self._set_pct_color(c)
-        self.bar.set_value(pct, c, pace)
-        if seconds is not None:
-            sub = f"reinicia em {fmt_time(seconds)}"
-            if pace is not None and not stale:  # uso vs. tempo decorrido
-                expected = pace * 100
-                if pct > expected + 8:
-                    sub += "  ·  ritmo alto"
-                elif pct < expected - 8:
-                    sub += "  ·  folgado"
-                else:
-                    sub += "  ·  no ritmo"
-            self.sub.setText(sub)
-            self.sub.show()
-        else:
-            self.sub.hide()
+        self._pace = pace
+        sub = fmt_time(seconds) if seconds is not None else ""
+        if pace is not None and not stale:  # uso vs. tempo decorrido
+            expected = pace * 100
+            if pct > expected + 8:
+                sub += "  ·  alto"
+            elif pct < expected - 8:
+                sub += "  ·  folgado"
+            else:
+                sub += "  ·  no ritmo"
+        self._sub = sub
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        w = self.width()
+        R = min(self.DIAM, w - 10) / 2
+        cx, cy = w / 2, R + 5
+        rect = QRectF(cx - R, cy - R, 2 * R, 2 * R)
+
+        pen = QPen(QColor(BG3), self.TH)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawArc(rect, 0, 360 * 16)
+        if self._pct is not None and self._pct > 0:  # arco: topo, sentido horário
+            pen2 = QPen(self._color, self.TH)
+            pen2.setCapStyle(Qt.PenCapStyle.RoundCap)
+            p.setPen(pen2)
+            p.drawArc(rect, 90 * 16, -int(min(self._pct, 100) / 100 * 360) * 16)
+        if self._pace is not None and 0.02 < self._pace < 0.99:
+            ang = math.radians(90 - self._pace * 360)
+            r0, r1 = R - self.TH / 2 - 2, R + self.TH / 2 + 2
+            cs, sn = math.cos(ang), math.sin(ang)
+            p.setPen(QPen(QColor("#e8e8e8"), 1.4))
+            p.drawLine(QPointF(cx + r0 * cs, cy - r0 * sn),
+                       QPointF(cx + r1 * cs, cy - r1 * sn))
+
+        # % ao centro: número grande + '%' menor, ambos escalam com o raio
+        num = f"{self._pct:.0f}" if self._pct is not None else "--"
+        fn = QFont(UI_FONT, max(11, int(R * 0.42)), QFont.Weight.Bold)
+        fm = QFontMetrics(fn)
+        nw = fm.horizontalAdvance(num)
+        fs = QFont(UI_FONT, max(8, int(R * 0.26)), QFont.Weight.DemiBold)
+        sw = QFontMetrics(fs).horizontalAdvance("%") if self._pct is not None else 0
+        bx = cx - (nw + sw + 1) / 2
+        p.setFont(fn)
+        p.setPen(QPen(QColor(FG if self._pct is not None else FG3)))
+        p.drawText(QRectF(bx, cy - R, nw + 4, 2 * R),
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, num)
+        if self._pct is not None:
+            p.setFont(fs)
+            p.setPen(QPen(QColor(FG2)))
+            p.drawText(QRectF(bx + nw + 1, cy - R + 1, sw + 4, 2 * R),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "%")
+
+        # label + subtexto
+        p.setFont(QFont(UI_FONT, 10, QFont.Weight.DemiBold))
+        p.setPen(QPen(QColor(FG)))
+        p.drawText(QRectF(0, cy + R + 6, w, 15), Qt.AlignmentFlag.AlignHCenter, self._label)
+        if self._sub:
+            p.setFont(QFont(UI_FONT, 8))
+            p.setPen(QPen(QColor(FG3)))
+            p.drawText(QRectF(0, cy + R + 22, w, 13), Qt.AlignmentFlag.AlignHCenter, self._sub)
+        p.end()
 
 
 class SparklineWidget(QWidget):
@@ -440,7 +476,7 @@ class DashboardWidget(QWidget):
         super().__init__()
         self.cfg = cfg
         self.dongle = dongle
-        self._scoped_rows = {}
+        self._scoped_rings = {}
         self._last_u = None
 
         self.setObjectName("dashRoot")
@@ -606,21 +642,22 @@ class DashboardWidget(QWidget):
         hbox.addLayout(head)
         main.addWidget(hcard)
 
-        # ---- Uso (destaque) ----
+        # ---- Uso (destaque) — medidores em anel ----
         ucard, ubox = self._card()
         ubox.addWidget(self._card_title("Uso"))
-        ubox.addSpacing(15)
-        self.bars_box = QVBoxLayout()
-        self.bars_box.setContentsMargins(0, 0, 0, 0)
-        self.bars_box.setSpacing(16)
-        self.row_5h = UsageRow("Sessão (5h)")
-        self.row_7d = UsageRow("Semana", compact=True)
-        self.bars_box.addWidget(self.row_5h)
-        self.bars_box.addWidget(self.row_7d)
-        ubox.addLayout(self.bars_box)
-        ubox.addSpacing(12)
+        ubox.addSpacing(16)
+        self.rings_box = QHBoxLayout()
+        self.rings_box.setContentsMargins(0, 0, 0, 0)
+        self.rings_box.setSpacing(6)
+        self.ring_5h = UsageRing("Sessão 5h")
+        self.ring_7d = UsageRing("Semana")
+        self.rings_box.addWidget(self.ring_5h)
+        self.rings_box.addWidget(self.ring_7d)
+        ubox.addLayout(self.rings_box)
+        ubox.addSpacing(14)
         self.meta = QLabel("")
         self.meta.setStyleSheet(f"color: {FG3}; font-size: 11px;")
+        self.meta.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         ubox.addWidget(self.meta)
         main.addWidget(ucard)
 
@@ -791,20 +828,20 @@ class DashboardWidget(QWidget):
             return max(0, int(epoch - now)) if epoch else fallback
 
         pct_5h = u.get("pct_5h")
-        self.row_5h.setVisible(pct_5h is not None)
-        self.row_5h.set_data(
+        self.ring_5h.setVisible(pct_5h is not None)
+        self.ring_5h.set_data(
             pct_5h, until(u.get("reset_5h_epoch"), u.get("seconds_until_reset_5h")),
             stale, WINDOW_5H)
 
         breakdown = u.get("weekly_breakdown") or []
         general = next((w for w in breakdown if w.get("kind") == "weekly_all"), None)
         if general:
-            self.row_7d.set_data(
+            self.ring_7d.set_data(
                 general.get("pct"),
                 until(general.get("reset"), u.get("seconds_until_reset")),
                 stale, WINDOW_7D)
         else:
-            self.row_7d.set_data(
+            self.ring_7d.set_data(
                 u.get("pct_7d", u.get("pct")),
                 until(u.get("reset_7d_epoch"), u.get("seconds_until_reset")),
                 stale, WINDOW_7D)
@@ -815,15 +852,15 @@ class DashboardWidget(QWidget):
                 continue
             model = w.get("model") or "por modelo"
             seen.add(model)
-            row = self._scoped_rows.get(model)
-            if row is None:
-                row = UsageRow(f"Semana · {model}", compact=True)
-                self._scoped_rows[model] = row
-                self.bars_box.addWidget(row)
-            row.set_data(w.get("pct"), until(w.get("reset")), stale, WINDOW_7D)
-        for model in list(self._scoped_rows):
+            ring = self._scoped_rings.get(model)
+            if ring is None:
+                ring = UsageRing(model)
+                self._scoped_rings[model] = ring
+                self.rings_box.addWidget(ring)
+            ring.set_data(w.get("pct"), until(w.get("reset")), stale, WINDOW_7D)
+        for model in list(self._scoped_rings):
             if model not in seen:
-                self._scoped_rows.pop(model).deleteLater()
+                self._scoped_rings.pop(model).deleteLater()
 
     def _render_forecast(self, u):
         now = time.time()
