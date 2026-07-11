@@ -17,7 +17,8 @@ def _fmt_tokens(n):
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
                              QHBoxLayout, QFrame, QPushButton, QSizePolicy,
                              QSlider, QRadioButton, QButtonGroup, QLineEdit)
-from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF
+from PyQt6.QtCore import (Qt, QTimer, QRectF, QPointF, pyqtProperty,
+                          QPropertyAnimation, QEasingCurve)
 from PyQt6.QtGui import (QPainter, QColor, QBrush, QFont, QFontMetrics, QPen,
                          QPainterPath, QLinearGradient)
 
@@ -26,6 +27,8 @@ TICK_MS = 1000          # countdown ao vivo (só recomputa textos de tempo)
 WINDOW_5H = 5 * 3600    # duração das janelas, p/ a barra de ritmo
 WINDOW_7D = 7 * 86400
 SOURCE_LABELS = {"api": "API oficial", "none": "sem dado"}
+# animações só no uso real; offscreen (screenshots/headless) pinta o estado final
+_ANIMATE = os.environ.get("QT_QPA_PLATFORM") != "offscreen"
 SHOW_MODES = [("Sempre visível", "always"),
               ("Só com Claude Code", "claude"),
               ("Só com VS Code / terminal", "dev"),
@@ -168,23 +171,37 @@ class UsageRing(QWidget):
     def __init__(self, label, parent=None):
         super().__init__(parent)
         self._label = label
-        self._pct = None
-        self._color = QColor(FG3)
         self._pace = None
         self._sub = ""
+        self._stale = False
+        self._display_pct = 0.0   # o que é desenhado (persegue o alvo com easing)
+        self._target_pct = None   # o valor real de uso
+        self._anim = QPropertyAnimation(self, b"arcPct", self)
+        self._anim.setDuration(600)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setMinimumWidth(76)
         self.setFixedHeight(self.DIAM + 46)
 
+    def _get_arc(self):
+        return self._display_pct
+
+    def _set_arc(self, v):
+        self._display_pct = float(v)
+        self.update()
+
+    arcPct = pyqtProperty(float, _get_arc, _set_arc)
+
     def set_data(self, pct, seconds, stale, window_s=None):
-        self._pct = pct
+        self._stale = stale
+        prev = self._target_pct
+        self._target_pct = pct
         if pct is None:
-            self._color = QColor(FG3)
             self._pace = None
             self._sub = ""
+            self._display_pct = 0.0
             self.update()
             return
-        self._color = QColor(FG3 if stale else color(pct))
         pace = None
         if window_s and seconds is not None:
             pace = max(0.0, min(1.0, 1 - seconds / window_s))
@@ -199,7 +216,17 @@ class UsageRing(QWidget):
             else:
                 sub += "  ·  no ritmo"
         self._sub = sub
-        self.update()
+        # anima o arco/número do valor anterior (ou de 0, na entrada) até o novo
+        if _ANIMATE and (prev is None or abs(prev - pct) > 0.05):
+            self._anim.stop()
+            self._anim.setStartValue(0.0 if prev is None else float(self._display_pct))
+            self._anim.setEndValue(float(pct))
+            self._anim.start()
+        elif self._anim.state() != QPropertyAnimation.State.Running:
+            self._display_pct = float(pct)  # sem animação em curso: sincroniza direto
+            self.update()
+        else:
+            self.update()  # animação rodando: só re-desenha sub/countdown
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -209,17 +236,20 @@ class UsageRing(QWidget):
         R = min(self.DIAM, w - 10) / 2
         cx, cy = w / 2, R + 5
         rect = QRectF(cx - R, cy - R, 2 * R, 2 * R)
+        has = self._target_pct is not None
+        disp = self._display_pct
+        c = QColor(FG3) if (self._stale or not has) else QColor(color(disp))
 
         pen = QPen(QColor(BG3), self.TH)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         p.setPen(pen)
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawArc(rect, 0, 360 * 16)
-        if self._pct is not None and self._pct > 0:  # arco: topo, sentido horário
-            pen2 = QPen(self._color, self.TH)
+        if has and disp > 0:  # arco: topo, sentido horário; cresce com a animação
+            pen2 = QPen(c, self.TH)
             pen2.setCapStyle(Qt.PenCapStyle.RoundCap)
             p.setPen(pen2)
-            p.drawArc(rect, 90 * 16, -int(min(self._pct, 100) / 100 * 360) * 16)
+            p.drawArc(rect, 90 * 16, -int(min(disp, 100) / 100 * 360) * 16)
         if self._pace is not None and 0.02 < self._pace < 0.99:
             ang = math.radians(90 - self._pace * 360)
             r0, r1 = R - self.TH / 2 - 2, R + self.TH / 2 + 2
@@ -228,19 +258,20 @@ class UsageRing(QWidget):
             p.drawLine(QPointF(cx + r0 * cs, cy - r0 * sn),
                        QPointF(cx + r1 * cs, cy - r1 * sn))
 
-        # % ao centro: número grande + '%' menor, ambos escalam com o raio
-        num = f"{self._pct:.0f}" if self._pct is not None else "--"
+        # % ao centro: número grande + '%' menor, ambos escalam com o raio.
+        # o número conta junto com o arco (usa o valor animado)
+        num = f"{disp:.0f}" if has else "--"
         fn = QFont(UI_FONT, max(11, int(R * 0.42)), QFont.Weight.Bold)
         fm = QFontMetrics(fn)
         nw = fm.horizontalAdvance(num)
         fs = QFont(UI_FONT, max(8, int(R * 0.26)), QFont.Weight.DemiBold)
-        sw = QFontMetrics(fs).horizontalAdvance("%") if self._pct is not None else 0
+        sw = QFontMetrics(fs).horizontalAdvance("%") if has else 0
         bx = cx - (nw + sw + 1) / 2
         p.setFont(fn)
-        p.setPen(QPen(QColor(FG if self._pct is not None else FG3)))
+        p.setPen(QPen(QColor(FG if has else FG3)))
         p.drawText(QRectF(bx, cy - R, nw + 4, 2 * R),
                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, num)
-        if self._pct is not None:
+        if has:
             p.setFont(fs)
             p.setPen(QPen(QColor(FG2)))
             p.drawText(QRectF(bx + nw + 1, cy - R + 1, sw + 4, 2 * R),
