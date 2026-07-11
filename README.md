@@ -25,6 +25,12 @@ Uma pílula flutuante que mostra quanto você já queimou das janelas de uso —
 
 ## Prévia
 
+<div align="center">
+  <img src="docs/aneis.gif" alt="anéis de uso animando" width="440">
+  <br>
+  <em>Os medidores de uso, ao vivo</em>
+</div>
+
 <table>
   <tr>
     <td width="50%"><img src="docs/painel.png" alt="painel"></td>
