@@ -171,12 +171,6 @@ def attach_forecasts(usage: dict, cfg: dict) -> dict:
             reset_s = max(0, int(epoch - now)) if epoch else fallback_reset.get(metric)
             fc = forecast(pct, latest_ts, rate, reset_s, now=now)
             fc["points"] = len(pts)
-            # 'alert' = estouro RELEVANTE (o que acende o aviso visual/notificação):
-            # overflow previsto E o balde já passou de um piso. Sem o piso, um burn
-            # rate de curto prazo com pct baixo (ex. Fable a 4%) projeta estouro em
-            # dias e acende o alarme sem ser acionável.
-            floor = 50 if metric == "5h" else 30
-            fc["alert"] = bool(fc.get("overflow_before_reset")) and pct >= floor
             out[metric] = fc
         return out
     except Exception as e:

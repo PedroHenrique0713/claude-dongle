@@ -219,11 +219,8 @@ class DongleWidget(QWidget):
             self._reset_5h_epoch = u.get("reset_5h_epoch")
             self._reset_w_epoch = u.get("reset_7d_epoch")
             fcs = u.get("forecast") or {}
-            # 'alert' (não 'overflow' cru): só pisca quando o estouro é acionável
-            # — o balde já passou do piso. Evita piscar por burn rate de curto
-            # prazo extrapolado por dias com o uso ainda baixo.
             self._overflow = (not self._stale) and any(
-                v.get("alert") for v in fcs.values())
+                v.get("overflow_before_reset") for v in fcs.values())
             pcts = [p for p in (self._s_pct, self._w_all, self._scoped_pct)
                     if p is not None]
             self._critical = (not self._stale) and any(p >= 95 for p in pcts)

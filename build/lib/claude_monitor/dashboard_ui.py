@@ -327,16 +327,10 @@ class ForecastRow(QWidget):
         eta = fc.get("eta_seconds")
         if eta is None:
             self._set_sub("ritmo estável · sem risco de estouro", FG3)
-        elif fc.get("alert"):  # estouro relevante (balde já alto): alarme
+        elif fc.get("overflow_before_reset"):
             self._set_sub(
                 f"no ritmo atual estoura em {fmt_time(eta)} · antes do reset"
                 f" ({fmt_time(seconds_until_reset)})", RED)
-        elif fc.get("overflow_before_reset"):
-            # estoura antes do reset só na conta, mas o uso ainda é baixo: o burn
-            # rate de curto prazo raramente se sustenta por tanto tempo — sem alarme
-            self._set_sub(
-                f"no ritmo recente estouraria em {fmt_time(eta)} · uso ainda baixo",
-                FG2)
         elif fc.get("overflow_before_reset") is False:
             self._set_sub(
                 f"estoura em {fmt_time(eta)} · o reset chega antes"
