@@ -757,11 +757,19 @@ class DashboardWidget(QWidget):
             import traceback; traceback.print_exc()
             return
         self._last_u = u
-        acc = u.get("account") or "—"
-        self.acc_name.setText(acc)
-        self.avatar.set_letter(acc)
-        self.acc_plan.setText((u.get("plan") or "").replace("claude_", "").upper())
-        self.acc_email.setText(u.get("email") or "")
+        plan = (u.get("plan") or "").replace("claude_", "").upper()
+        if u.get("identity_stale"):
+            # oauthAccount obsoleto (trocou de conta e o Claude Code ainda não
+            # reescreveu o nome): não exibir o nome antigo como se fosse o atual
+            self.acc_name.setText("Conta trocada")
+            self.avatar.set_letter("?")
+            self.acc_email.setText("reabra o Claude Code para sincronizar o nome")
+        else:
+            acc = u.get("account") or "—"
+            self.acc_name.setText(acc)
+            self.avatar.set_letter(acc)
+            self.acc_email.setText(u.get("email") or "")
+        self.acc_plan.setText(plan)
         self._render_usage_rows(u)
         self._render_forecast(u)
         self.meta.setText(self._meta_text(u))

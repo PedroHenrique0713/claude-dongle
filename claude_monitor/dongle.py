@@ -197,8 +197,12 @@ class DongleWidget(QWidget):
             u = monitor.calc_usage(self.cfg)
 
             if u.get("account_changed"):
-                notifier.send(f"Conta trocada: {u['account']}",
-                              f"Plano: {u['plan']} | Email: {u['email']}")
+                if u.get("identity_stale"):
+                    notifier.send("Conta trocada",
+                                  f"Agora no plano {u['plan']} · reabra o Claude "
+                                  "Code para sincronizar o nome")
+                else:
+                    notifier.send(f"Conta: {u['account']}", f"Plano: {u['plan']}")
 
             self._s_pct = u.get("pct_5h")
             # Semanal geral e semanal por modelo (ex. Fable) são limites

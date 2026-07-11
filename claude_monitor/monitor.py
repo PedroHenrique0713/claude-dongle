@@ -31,8 +31,23 @@ def read_sessions(claude_dir: str) -> list[dict]:
             continue
     return sessions
 
+CREDENTIALS_JSON = Path.home() / ".claude" / ".credentials.json"
+
+
+def _active_token_tier():
+    """(subscriptionType, rateLimitTier) da conta ATIVA, lidos do token. Mais
+    atual que o oauthAccount, que o Claude Code demora a reescrever ao trocar."""
+    try:
+        d = json.loads(CREDENTIALS_JSON.read_text())
+        o = d.get("claudeAiOauth", d)
+        return o.get("subscriptionType"), o.get("rateLimitTier")
+    except (OSError, json.JSONDecodeError):
+        return None, None
+
+
 def get_account_identity() -> dict:
-    info = {"account_name": None, "org_name": None, "plan": None, "email": None, "uuid": None}
+    info = {"account_name": None, "org_name": None, "plan": None, "email": None,
+            "uuid": None, "identity_stale": False}
     try:
         data = json.loads(CLAUDE_JSON.read_text())
         oa = data.get("oauthAccount", {})
@@ -41,6 +56,16 @@ def get_account_identity() -> dict:
         info["plan"] = oa.get("organizationType") or oa.get("organizationRateLimitTier", "?")
         info["email"] = oa.get("emailAddress")
         info["uuid"] = oa.get("accountUuid", "")
+        # A conta ATIVA vem do token. Se o tier do token diverge do oauthAccount,
+        # o oauthAccount está OBSOLETO (troca de conta que o Claude Code ainda não
+        # reescreveu) → nome/email antigos deixam de ser confiáveis; o plano real
+        # vem do token.
+        sub, tier = _active_token_tier()
+        info["tier"] = tier  # tier do token: identifica a conta ativa p/ o cache
+        oa_tiers = {oa.get("organizationRateLimitTier"), oa.get("userRateLimitTier")}
+        if tier and tier not in oa_tiers:
+            info["identity_stale"] = True
+            info["plan"] = sub or tier
     except (OSError, json.JSONDecodeError):
         pass
     return info
@@ -56,6 +81,7 @@ def detect_account_change() -> tuple[bool, str | None]:
         cur.get("uuid") != _prev_identity.get("uuid")
         or cur.get("account_name") != _prev_identity.get("account_name")
         or cur.get("email") != _prev_identity.get("email")
+        or cur.get("identity_stale") != _prev_identity.get("identity_stale")
     )
     _prev_identity = cur
     return changed, name
@@ -72,9 +98,13 @@ def calc_usage(state: dict) -> dict:
     account = get_account_identity()
     account_changed, _ = detect_account_change()
 
-    # Passa a conta atual para o cache não servir uso de outra conta ao trocar.
-    api_data = usage_api.fetch(state.get("api_poll_interval", 60),
-                               account=account.get("uuid"))
+    # Chave de conta p/ o cache = uuid + tier do token. O tier muda ao trocar de
+    # conta mesmo quando o oauthAccount (uuid) fica obsoleto, então o cache de uso
+    # da conta anterior não vaza para a nova.
+    acct_key = account.get("uuid") or ""
+    if account.get("tier"):
+        acct_key = f"{acct_key}:{account['tier']}"
+    api_data = usage_api.fetch(state.get("api_poll_interval", 60), account=acct_key)
 
     stale = False
     scope_7d = None
@@ -122,6 +152,7 @@ def calc_usage(state: dict) -> dict:
         "account": account.get("account_name", "desconhecida"),
         "plan": account.get("plan", "desconhecido"),
         "email": account.get("email", ""),
+        "identity_stale": account.get("identity_stale", False),
         "active_sessions": len(active_sessions),
         "idle_sessions": len(idle_sessions),
         "last_reset": last_reset.isoformat(),
