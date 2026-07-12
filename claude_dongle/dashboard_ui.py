@@ -24,16 +24,16 @@ from PyQt6.QtGui import (QPainter, QColor, QBrush, QFont, QFontMetrics, QPen,
                          QPainterPath, QLinearGradient)
 
 REFRESH_MS = 5000
-TICK_MS = 1000          # countdown ao vivo (só recomputa textos de tempo)
-WINDOW_5H = 5 * 3600    # duração das janelas, p/ a barra de ritmo
+TICK_MS = 1000          # live countdown (only recomputes time texts)
+WINDOW_5H = 5 * 3600    # window durations, for the pace bar
 WINDOW_7D = 7 * 86400
-SOURCE_LABELS = {"api": "API oficial", "none": "sem dado"}
-# animações só no uso real; offscreen (screenshots/headless) pinta o estado final
+SOURCE_LABELS = {"api": "official API", "none": "no data"}
+# animations only in real use; offscreen (screenshots/headless) paints the final state
 _ANIMATE = os.environ.get("QT_QPA_PLATFORM") != "offscreen"
-SHOW_MODES = [("Sempre visível", "always"),
-              ("Só com Claude Code", "claude"),
-              ("Só com VS Code / terminal", "dev"),
-              ("Processos específicos", "custom")]
+SHOW_MODES = [("Always visible", "always"),
+              ("Only with Claude Code", "claude"),
+              ("Only with VS Code / terminal", "dev"),
+              ("Specific processes", "custom")]
 
 
 def _rgba(hex_color, alpha):
@@ -124,9 +124,9 @@ def _qss():
 
 
 class UsageBar(QWidget):
-    """Barra fina arredondada: trilho + preenchimento por severidade, e um
-    marcador de RITMO — onde o consumo estaria se fosse linear ao longo da
-    janela. Preenchimento à direita do marcador = queimando adiantado."""
+    """Thin rounded bar: track + severity-colored fill, plus a PACE marker —
+    where usage would sit if it were linear across the window. Fill past
+    the marker = burning ahead of schedule."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -134,7 +134,7 @@ class UsageBar(QWidget):
         self.setMinimumWidth(120)
         self._pct = None
         self._color = QColor(FG3)
-        self._pace = None  # 0..1 fração de tempo decorrido da janela
+        self._pace = None  # 0..1 fraction of the window elapsed
 
     def set_value(self, pct, color_hex, pace=None):
         self._pct = pct
@@ -162,9 +162,9 @@ class UsageBar(QWidget):
 
 
 class UsageRing(QWidget):
-    """Medidor em anel: trilho + arco por severidade, um tick de RITMO (onde o
-    consumo estaria no linear), o % ao centro e label/subtexto embaixo. Largura
-    flexível: o raio encolhe sozinho quando há muitos anéis lado a lado."""
+    """Ring gauge: track + severity-colored arc, a PACE tick (where usage
+    would sit if linear), the % in the center and label/subtext below. Flexible
+    width: the radius shrinks on its own when many rings sit side by side."""
 
     DIAM = 84
     TH = 8
@@ -175,8 +175,8 @@ class UsageRing(QWidget):
         self._pace = None
         self._sub = ""
         self._stale = False
-        self._display_pct = 0.0   # o que é desenhado (persegue o alvo com easing)
-        self._target_pct = None   # o valor real de uso
+        self._display_pct = 0.0   # what gets drawn (chases the target with easing)
+        self._target_pct = None   # the actual usage value
         self._anim = QPropertyAnimation(self, b"arcPct", self)
         self._anim.setDuration(600)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -208,26 +208,26 @@ class UsageRing(QWidget):
             pace = max(0.0, min(1.0, 1 - seconds / window_s))
         self._pace = pace
         sub = fmt_time(seconds) if seconds is not None else ""
-        if pace is not None and not stale:  # uso vs. tempo decorrido
+        if pace is not None and not stale:  # usage vs. elapsed time
             expected = pace * 100
             if pct > expected + 8:
-                sub += "  ·  alto"
+                sub += "  ·  high"
             elif pct < expected - 8:
-                sub += "  ·  folgado"
+                sub += "  ·  low"
             else:
-                sub += "  ·  no ritmo"
+                sub += "  ·  on pace"
         self._sub = sub
-        # anima o arco/número do valor anterior (ou de 0, na entrada) até o novo
+        # animate arc/number from the previous value (or 0 on first show) to the new one
         if _ANIMATE and (prev is None or abs(prev - pct) > 0.05):
             self._anim.stop()
             self._anim.setStartValue(0.0 if prev is None else float(self._display_pct))
             self._anim.setEndValue(float(pct))
             self._anim.start()
         elif self._anim.state() != QPropertyAnimation.State.Running:
-            self._display_pct = float(pct)  # sem animação em curso: sincroniza direto
+            self._display_pct = float(pct)  # no animation in flight: sync directly
             self.update()
         else:
-            self.update()  # animação rodando: só re-desenha sub/countdown
+            self.update()  # animation running: only redraw sub/countdown
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -246,7 +246,7 @@ class UsageRing(QWidget):
         p.setPen(pen)
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawArc(rect, 0, 360 * 16)
-        if has and disp > 0:  # arco: topo, sentido horário; cresce com a animação
+        if has and disp > 0:  # arc: from top, clockwise; grows with the animation
             pen2 = QPen(c, self.TH)
             pen2.setCapStyle(Qt.PenCapStyle.RoundCap)
             p.setPen(pen2)
@@ -259,8 +259,8 @@ class UsageRing(QWidget):
             p.drawLine(QPointF(cx + r0 * cs, cy - r0 * sn),
                        QPointF(cx + r1 * cs, cy - r1 * sn))
 
-        # % ao centro: número grande + '%' menor, ambos escalam com o raio.
-        # o número conta junto com o arco (usa o valor animado)
+        # % in the center: big number + smaller '%', both scale with the radius.
+        # the number counts up along with the arc (uses the animated value)
         num = f"{disp:.0f}" if has else "--"
         fn = QFont(UI_FONT, max(11, int(R * 0.42)), QFont.Weight.Bold)
         fm = QFontMetrics(fn)
@@ -278,7 +278,7 @@ class UsageRing(QWidget):
             p.drawText(QRectF(bx + nw + 1, cy - R + 1, sw + 4, 2 * R),
                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "%")
 
-        # label + subtexto
+        # label + subtext
         p.setFont(QFont(UI_FONT, 10, QFont.Weight.DemiBold))
         p.setPen(QPen(QColor(FG)))
         p.drawText(QRectF(0, cy + R + 6, w, 15), Qt.AlignmentFlag.AlignHCenter, self._label)
@@ -292,7 +292,7 @@ class UsageRing(QWidget):
 class SparklineWidget(QWidget):
     """Current-window usage series, hand painted: line + fill + last-point dot."""
 
-    MIN_SPAN_S = 1800  # domínio X mínimo; 2-3 pontos não viram linha esticada
+    MIN_SPAN_S = 1800  # minimum X domain; 2-3 points don't become a stretched line
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -313,7 +313,7 @@ class SparklineWidget(QWidget):
         ceil_pen = QPen(QColor(BG3))
         ceil_pen.setWidthF(1.0)
         p.setPen(ceil_pen)
-        p.drawLine(QPointF(0, 0.5), QPointF(w, 0.5))  # teto = 100%
+        p.drawLine(QPointF(0, 0.5), QPointF(w, 0.5))  # ceiling = 100%
         pts = self._points
         if not pts:
             p.end()
@@ -326,7 +326,7 @@ class SparklineWidget(QWidget):
             y = h - 2 - (min(pct, 100.0) / 100.0) * (h - 4)
             return QPointF(x, y)
 
-        stride = max(1, len(pts) // max(1, int(w)))  # 1 ponto por pixel basta
+        stride = max(1, len(pts) // max(1, int(w)))  # 1 point per pixel is enough
         draw = pts[::stride]
         if draw[-1] != pts[-1]:
             draw.append(pts[-1])
@@ -389,32 +389,32 @@ class ForecastRow(QWidget):
         rate = (fc or {}).get("rate_pph")
         if rate is None:
             self.rate.setText("")
-            self._set_sub("coletando dados…", FG3)
+            self._set_sub("collecting data…", FG3)
             return
-        self.rate.setText(f"{rate:+.1f} p.p./h")
+        self.rate.setText(f"{rate:+.1f} pp/h")
         eta = fc.get("eta_seconds")
         if eta is None:
-            self._set_sub("ritmo estável · sem risco de estouro", FG3)
-        elif fc.get("alert"):  # estouro relevante (balde já alto): alarme
+            self._set_sub("steady pace · no overflow risk", FG3)
+        elif fc.get("alert"):  # relevant overflow (bucket already high): alarm
             self._set_sub(
-                f"no ritmo atual estoura em {fmt_time(eta)} · antes do reset"
+                f"at current pace overflows in {fmt_time(eta)} · before reset"
                 f" ({fmt_time(seconds_until_reset)})", RED)
         elif fc.get("overflow_before_reset"):
-            # estoura antes do reset só na conta, mas o uso ainda é baixo: o burn
-            # rate de curto prazo raramente se sustenta por tanto tempo — sem alarme
+            # overflows before the reset only on paper, but usage is still low: the
+            # short-term burn rate rarely holds up for that long — no alarm
             self._set_sub(
-                f"no ritmo recente estouraria em {fmt_time(eta)} · uso ainda baixo",
+                f"at recent pace would overflow in {fmt_time(eta)} · usage still low",
                 FG2)
         elif fc.get("overflow_before_reset") is False:
             self._set_sub(
-                f"estoura em {fmt_time(eta)} · o reset chega antes"
+                f"overflows in {fmt_time(eta)} · reset arrives first"
                 f" ({fmt_time(seconds_until_reset)})", GREEN)
         else:
-            self._set_sub(f"no ritmo atual estoura em {fmt_time(eta)}", FG2)
+            self._set_sub(f"at current pace overflows in {fmt_time(eta)}", FG2)
 
 
 class BarRow(QWidget):
-    """Nome + barra proporcional + valor — uma linha do breakdown por projeto."""
+    """Name + proportional bar + value — one row of the per-project breakdown."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -442,17 +442,17 @@ class BarRow(QWidget):
 
 
 class HeatmapWidget(QWidget):
-    """Calendário estilo GitHub: uma célula por dia, tom por intensidade de uso."""
+    """GitHub-style calendar: one cell per day, shade by usage intensity."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedHeight(15)
-        self._cells = []  # [(day, frac 0..1), ...] cronológico
+        self._cells = []  # [(day, frac 0..1), ...] chronological
 
     def set_data(self, pairs):
         mx = max((v for _, v in pairs), default=1) or 1
         self._cells = [(d, (v / mx)) for d, v in pairs]
-        self.setToolTip("mais escuro à direita = mais recente · intensidade = uso")
+        self.setToolTip("rightmost = most recent · shade = usage")
         self.update()
 
     def paintEvent(self, event):
@@ -466,7 +466,7 @@ class HeatmapWidget(QWidget):
         sz = min(13.0, (self.width() - (n - 1) * gap) / n)
         base, acc = QColor(BG3), QColor(ACCENT)
         for i, (_, frac) in enumerate(self._cells):
-            f = frac ** 0.6 if frac > 0 else 0  # realça dias de uso baixo
+            f = frac ** 0.6 if frac > 0 else 0  # emphasizes low-usage days
             col = QColor(
                 int(base.red() + (acc.red() - base.red()) * f),
                 int(base.green() + (acc.green() - base.green()) * f),
@@ -477,7 +477,7 @@ class HeatmapWidget(QWidget):
 
 
 class AvatarWidget(QWidget):
-    """Círculo com gradiente e a inicial da conta — cara de app moderno."""
+    """Gradient circle with the account's initial — modern-app look."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -523,7 +523,7 @@ class DashboardWidget(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh)
         self._timer.start(REFRESH_MS)
-        self._tick_timer = QTimer(self)  # countdown ao vivo
+        self._tick_timer = QTimer(self)  # live countdown
         self._tick_timer.timeout.connect(self._tick)
         self._tick_timer.start(TICK_MS)
         self.adjustSize()
@@ -545,9 +545,9 @@ class DashboardWidget(QWidget):
         return f
 
     def _card(self, cm=(18, 16, 18, 16)):
-        # Sem QGraphicsDropShadowEffect: ele quebra a propagação de sizeHint
-        # (o card não recresce quando um disclosure abre) e é frágil no XCB. A
-        # profundidade vem do contraste surface↑ sobre o fundo escuro + borda.
+        # No QGraphicsDropShadowEffect: it breaks sizeHint propagation
+        # (the card doesn't regrow when a disclosure opens) and is fragile on
+        # XCB. Depth comes from surface↑ contrast over the dark bg + border.
         f = QFrame()
         f.setProperty("card", "true")
         lay = QVBoxLayout(f)
@@ -571,12 +571,12 @@ class DashboardWidget(QWidget):
         return b
 
     def _fc_header_text(self):
-        return ("▾  " if self._fc_open else "▸  ") + "PREVISÃO"
+        return ("▾  " if self._fc_open else "▸  ") + "FORECAST"
 
     def _fit(self):
-        # A cascata card→janela precisa ser ativada à mão: com o disclosure
-        # dentro de um QFrame, esconder/mostrar o container não recalcula o
-        # sizeHint do card sozinho (sem depender do event loop).
+        # The card→window cascade must be triggered by hand: with the disclosure
+        # inside a QFrame, hiding/showing the container doesn't recompute the
+        # card's sizeHint on its own (without relying on the event loop).
         for c in (self.fc_container, self.pj_container):
             pl = c.parentWidget().layout()
             if pl is not None:
@@ -587,9 +587,9 @@ class DashboardWidget(QWidget):
         self.adjustSize()
 
     def _fade_widget(self, w):
-        # fade de entrada da seção. O efeito é aplicado DEPOIS do _fit (que já
-        # resolveu o sizeHint com o container visível) e removido ao terminar —
-        # graphics effect presente durante o resize quebra a cascata no XCB.
+        # section fade-in. The effect is applied AFTER _fit (which already
+        # resolved the sizeHint with the container visible) and removed when
+        # done — a graphics effect alive during resize breaks the cascade on XCB.
         eff = QGraphicsOpacityEffect(w)
         w.setGraphicsEffect(eff)
         anim = QPropertyAnimation(eff, b"opacity", self)
@@ -599,7 +599,7 @@ class DashboardWidget(QWidget):
         anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         anim.finished.connect(lambda: w.setGraphicsEffect(None))
         anim.start()
-        self._disc_anim = anim  # mantém a referência viva até terminar
+        self._disc_anim = anim  # keeps the reference alive until it finishes
 
     def _toggle_forecast(self):
         self._fc_open = not self._fc_open
@@ -607,7 +607,7 @@ class DashboardWidget(QWidget):
         self.fc_header.setText(self._fc_header_text())
         self.cfg["forecast_expanded"] = self._fc_open
         config.save(self.cfg)
-        self._fit()  # janela reencolhe/expande com o conteúdo
+        self._fit()  # window shrinks/expands with the content
         if self._fc_open and _ANIMATE:
             self._fade_widget(self.fc_container)
 
@@ -617,7 +617,7 @@ class DashboardWidget(QWidget):
         return l
 
     def _pj_header_text(self):
-        return ("▾  " if self._pj_open else "▸  ") + "POR PROJETO"
+        return ("▾  " if self._pj_open else "▸  ") + "BY PROJECT"
 
     def _toggle_projects(self):
         self._pj_open = not self._pj_open
@@ -633,8 +633,8 @@ class DashboardWidget(QWidget):
             self._fade_widget(self.pj_container)
 
     def _kick_projects(self):
-        # o parse inicial pode levar ~8s: sempre em thread (o lock em
-        # projects.refresh serializa; incrementais depois são ~5ms).
+        # the initial parse can take ~8s: always in a thread (the lock in
+        # projects.refresh serializes; later incrementals are ~5ms).
         threading.Thread(target=projects.refresh, daemon=True).start()
 
     def _render_projects(self):
@@ -649,7 +649,7 @@ class DashboardWidget(QWidget):
                 row.setVisible(True)
                 row.set_data(p["name"], 100 * p["output"] / maxp,
                              _fmt_tokens(p["output"]),
-                             f"{p['output']:,} tokens de saída · {p['total']:,} totais")
+                             f"{p['output']:,} output tokens · {p['total']:,} total")
             else:
                 row.setVisible(False)
         maxm = max((m["output"] for m in models), default=1) or 1
@@ -659,7 +659,7 @@ class DashboardWidget(QWidget):
                 row.setVisible(True)
                 row.set_data(m["name"].replace("claude-", ""),
                              100 * m["output"] / maxm, _fmt_tokens(m["output"]),
-                             f"{m['output']:,} tokens de saída")
+                             f"{m['output']:,} output tokens")
             else:
                 row.setVisible(False)
 
@@ -668,7 +668,7 @@ class DashboardWidget(QWidget):
         main.setContentsMargins(16, 16, 16, 16)
         main.setSpacing(13)
 
-        # ---- Conta (header) ----
+        # ---- Account (header) ----
         hcard, hbox = self._card(cm=(16, 14, 16, 14))
         head = QHBoxLayout()
         head.setContentsMargins(0, 0, 0, 0)
@@ -693,15 +693,15 @@ class DashboardWidget(QWidget):
         hbox.addLayout(head)
         main.addWidget(hcard)
 
-        # ---- Uso (destaque) — medidores em anel ----
+        # ---- Usage (highlight) — ring gauges ----
         ucard, ubox = self._card()
-        ubox.addWidget(self._card_title("Uso"))
+        ubox.addWidget(self._card_title("Usage"))
         ubox.addSpacing(16)
         self.rings_box = QHBoxLayout()
         self.rings_box.setContentsMargins(0, 0, 0, 0)
         self.rings_box.setSpacing(6)
-        self.ring_5h = UsageRing("Sessão 5h")
-        self.ring_7d = UsageRing("Semana")
+        self.ring_5h = UsageRing("5h session")
+        self.ring_7d = UsageRing("Week")
         self.rings_box.addWidget(self.ring_5h)
         self.rings_box.addWidget(self.ring_7d)
         ubox.addLayout(self.rings_box)
@@ -712,7 +712,7 @@ class DashboardWidget(QWidget):
         ubox.addWidget(self.meta)
         main.addWidget(ucard)
 
-        # ---- Previsão (disclosure) ----
+        # ---- Forecast (disclosure) ----
         self._fc_open = bool(self.cfg.get("forecast_expanded", False))
         fccard, fcbox = self._card(cm=(18, 14, 18, 14))
         self.fc_header = self._disclosure_btn(self._fc_header_text(), self._toggle_forecast)
@@ -721,8 +721,8 @@ class DashboardWidget(QWidget):
         self.fc_box = QVBoxLayout(self.fc_container)
         self.fc_box.setContentsMargins(0, 15, 0, 2)
         self.fc_box.setSpacing(14)
-        self.fc_5h = ForecastRow("Sessão (5h)")
-        self.fc_7d = ForecastRow("Semana")
+        self.fc_5h = ForecastRow("Session (5h)")
+        self.fc_7d = ForecastRow("Week")
         self.fc_box.addWidget(self.fc_5h)
         self.fc_box.addWidget(self.fc_7d)
         fcbox.addWidget(self.fc_container)
@@ -730,7 +730,7 @@ class DashboardWidget(QWidget):
         self._fc_scoped = {}
         main.addWidget(fccard)
 
-        # ---- Por projeto (disclosure) ----
+        # ---- By project (disclosure) ----
         self._pj_open = bool(self.cfg.get("projects_expanded", False))
         pjcard, pjcardbox = self._card(cm=(18, 14, 18, 14))
         self.pj_header = self._disclosure_btn(self._pj_header_text(), self._toggle_projects)
@@ -739,24 +739,24 @@ class DashboardWidget(QWidget):
         pj_box = QVBoxLayout(self.pj_container)
         pj_box.setContentsMargins(0, 14, 0, 2)
         pj_box.setSpacing(7)
-        cap = QLabel("Tokens de saída · últimos 7 dias · contagem local")
+        cap = QLabel("Output tokens · last 7 days · local count")
         cap.setStyleSheet(f"color: {FG3}; font-size: 10px;")
         pj_box.addWidget(cap)
         pj_box.addSpacing(4)
-        pj_box.addWidget(self._mini_label("Projetos"))
+        pj_box.addWidget(self._mini_label("Projects"))
         self.pj_proj_rows = [BarRow() for _ in range(8)]
         for r in self.pj_proj_rows:
             pj_box.addWidget(r)
         pj_box.addSpacing(10)
-        pj_box.addWidget(self._mini_label("Modelos"))
+        pj_box.addWidget(self._mini_label("Models"))
         self.pj_model_rows = [BarRow() for _ in range(5)]
         for r in self.pj_model_rows:
             pj_box.addWidget(r)
         pj_box.addSpacing(11)
-        pj_box.addWidget(self._mini_label("Últimos 14 dias"))
+        pj_box.addWidget(self._mini_label("Last 14 days"))
         self.pj_heatmap = HeatmapWidget()
         pj_box.addWidget(self.pj_heatmap)
-        self.pj_empty = QLabel("coletando dados locais…")
+        self.pj_empty = QLabel("collecting local data…")
         self.pj_empty.setStyleSheet(f"color: {FG3}; font-size: 11px;")
         pj_box.addWidget(self.pj_empty)
         pjcardbox.addWidget(self.pj_container)
@@ -766,14 +766,14 @@ class DashboardWidget(QWidget):
             self._kick_projects()
             self._render_projects()
 
-        # ---- Ajustes (dongle + visibilidade + notificações) ----
+        # ---- Settings (dongle + visibility + notifications) ----
         scard, sbox = self._card(cm=(18, 16, 18, 18))
 
         sbox.addWidget(self._card_title("Dongle"))
         sbox.addSpacing(13)
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
-        op_lbl = QLabel("Opacidade")
+        op_lbl = QLabel("Opacity")
         op_lbl.setStyleSheet("font-size: 12px;")
         row.addWidget(op_lbl)
         row.addSpacing(12)
@@ -791,7 +791,7 @@ class DashboardWidget(QWidget):
         sbox.addLayout(row)
 
         sbox.addSpacing(20)
-        sbox.addWidget(self._card_title("Visibilidade"))
+        sbox.addWidget(self._card_title("Visibility"))
         sbox.addSpacing(6)
         self.show_group = QButtonGroup(self)
         current = self.cfg.get("show_mode", "always")
@@ -803,7 +803,7 @@ class DashboardWidget(QWidget):
         self.show_group.idToggled.connect(self._on_mode)
 
         sbox.addSpacing(20)
-        sbox.addWidget(self._card_title("Notificações"))
+        sbox.addWidget(self._card_title("Notifications"))
         sbox.addSpacing(11)
         self.thr_row = QHBoxLayout()
         self.thr_row.setContentsMargins(0, 0, 0, 0)
@@ -813,7 +813,7 @@ class DashboardWidget(QWidget):
         sbox.addSpacing(6)
         add_row = QHBoxLayout()
         add_row.setContentsMargins(0, 0, 0, 0)
-        add_btn = QPushButton("+ Adicionar")
+        add_btn = QPushButton("+ Add")
         add_btn.setProperty("kind", "ghost")
         add_btn.clicked.connect(self._add_thr)
         add_row.addWidget(add_btn)
@@ -821,16 +821,16 @@ class DashboardWidget(QWidget):
         sbox.addLayout(add_row)
         main.addWidget(scard)
 
-        # ---- Ações ----
+        # ---- Actions ----
         main.addSpacing(2)
         btns = QHBoxLayout()
         btns.setContentsMargins(4, 0, 4, 0)
-        quit_btn = QPushButton("Sair do monitor")
+        quit_btn = QPushButton("Quit monitor")
         quit_btn.setProperty("kind", "danger")
         quit_btn.clicked.connect(QApplication.quit)
         btns.addWidget(quit_btn)
         btns.addStretch()
-        close_btn = QPushButton("Fechar")
+        close_btn = QPushButton("Close")
         close_btn.setProperty("kind", "primary")
         close_btn.clicked.connect(self.close)
         btns.addWidget(close_btn)
@@ -847,11 +847,11 @@ class DashboardWidget(QWidget):
         self._last_u = u
         plan = (u.get("plan") or "").replace("claude_", "").upper()
         if u.get("identity_stale"):
-            # oauthAccount obsoleto (trocou de conta e o Claude Code ainda não
-            # reescreveu o nome): não exibir o nome antigo como se fosse o atual
-            self.acc_name.setText("Conta trocada")
+            # stale oauthAccount (account switched and Claude Code hasn't
+            # rewritten the name yet): don't show the old name as current
+            self.acc_name.setText("Account switched")
             self.avatar.set_letter("?")
-            self.acc_email.setText("reabra o Claude Code para sincronizar o nome")
+            self.acc_email.setText("reopen Claude Code to sync the name")
         else:
             acc = u.get("account") or "—"
             self.acc_name.setText(acc)
@@ -862,12 +862,12 @@ class DashboardWidget(QWidget):
         self._render_forecast(u)
         self.meta.setText(self._meta_text(u))
         if self._pj_open:
-            self._kick_projects()  # incremental barato; lock evita concorrência
+            self._kick_projects()  # cheap incremental; lock prevents concurrency
             self._render_projects()
 
     def _tick(self):
-        # countdown ao vivo (1s): recomputa só os tempos/ritmo das rows de uso,
-        # sem refazer calc_usage/forecast/projects (esses seguem no ciclo de 5s).
+        # live countdown (1s): recomputes only the times/pace of the usage rows,
+        # without redoing calc_usage/forecast/projects (those stay on the 5s cycle).
         if self._last_u is not None:
             self._render_usage_rows(self._last_u)
 
@@ -901,7 +901,7 @@ class DashboardWidget(QWidget):
         for w in breakdown:
             if w.get("kind") != "weekly_scoped":
                 continue
-            model = w.get("model") or "por modelo"
+            model = w.get("model") or "per model"
             seen.add(model)
             ring = self._scoped_rings.get(model)
             if ring is None:
@@ -949,11 +949,11 @@ class DashboardWidget(QWidget):
         for w in breakdown:
             if w.get("kind") != "weekly_scoped":
                 continue
-            model = w.get("model") or "por modelo"
+            model = w.get("model") or "per model"
             seen_fc.add(model)
             row = self._fc_scoped.get(model)
             if row is None:
-                row = ForecastRow(f"Semana · {model}")
+                row = ForecastRow(f"Week · {model}")
                 self._fc_scoped[model] = row
                 self.fc_box.addWidget(row)
             metric = f"7d:{w.get('model') or 'scoped'}"
@@ -968,13 +968,13 @@ class DashboardWidget(QWidget):
         parts = [SOURCE_LABELS.get(u.get("source"), u.get("source") or "?")]
         if u.get("stale"):
             age = u.get("stale_age_seconds")
-            parts.append(f"dado antigo · há {fmt_time(age)}" if age is not None
-                         else "dado antigo")
+            parts.append(f"stale data · {fmt_time(age)} ago" if age is not None
+                         else "stale data")
         act = u.get("active_sessions") or 0
         if act:
-            parts.append("1 sessão ativa" if act == 1 else f"{act} sessões ativas")
+            parts.append("1 active session" if act == 1 else f"{act} active sessions")
         if u.get("overage_status") == "enabled":
-            parts.append("uso extra ativo")
+            parts.append("extra usage on")
         return "  ·  ".join(parts)
 
     # ---- settings ---------------------------------------------------------

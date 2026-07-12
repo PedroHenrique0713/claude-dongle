@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""GIF do card 'Uso' com os anéis animando (0 -> valores), offscreen.
+"""GIF of the 'Usage' card with the rings animating (0 -> values), offscreen.
 
-Renderiza os frames pelo próprio renderer do app (UsageRing) e monta o GIF
-com PIL — determinístico, sem gravar a tela, sem PII. Reproduz a mesma easing
-(OutCubic) da animação real.
+Renders the frames through the app's own renderer (UsageRing) and assembles the
+GIF with PIL — deterministic, no screen recording, no PII. Reproduces the same
+easing (OutCubic) as the real animation.
 
-Uso:
-    python scripts/gen_gif.py            # escreve docs/aneis.gif
-    python scripts/gen_gif.py /tmp/out   # outro diretório
+Usage:
+    python scripts/gen_gif.py            # writes docs/rings.gif
+    python scripts/gen_gif.py /tmp/out   # another directory
 """
 import os, sys
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -16,18 +16,18 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else REPO / "docs"
 
-from claude_monitor.utils import BG, SURFACE, FG2, UI_FONT
-from claude_monitor.dashboard_ui import UsageRing
+from claude_dongle.utils import BG, SURFACE, FG2, UI_FONT
+from claude_dongle.dashboard_ui import UsageRing
 
 from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QFrame
 from PyQt6.QtGui import QFont, QImage
 from PyQt6.QtCore import Qt
 from PIL import Image
 
-# dados fictícios (mesmos das screenshots)
-SPECS = [("Sessão 5h", 46, 0.517, "2h25  ·  no ritmo"),
-         ("Semana", 34, 0.471, "3d 16h  ·  folgado"),
-         ("Fable", 58, 0.471, "3d 16h  ·  alto")]
+# fake data (same as the screenshots)
+SPECS = [("5h session", 46, 0.517, "2h25  ·  on pace"),
+         ("Week", 34, 0.471, "3d 16h  ·  low"),
+         ("Fable", 58, 0.471, "3d 16h  ·  high")]
 
 app = QApplication(sys.argv[:1])
 
@@ -42,7 +42,7 @@ card = QFrame()
 card.setStyleSheet(f"background: {SURFACE}; border-radius: 16px;")
 cbox = QVBoxLayout(card)
 cbox.setContentsMargins(18, 15, 18, 15)
-title = QLabel("USO")
+title = QLabel("USAGE")
 tf = QFont(UI_FONT, 8, QFont.Weight.Bold)
 tf.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.4)
 title.setFont(tf)
@@ -70,7 +70,7 @@ def _to_pil(pm):
     return Image.frombuffer("RGBA", (w, h), bytes(ptr), "raw", "RGBA", stride, 1)
 
 
-def _eased(t):   # OutCubic, igual ao app
+def _eased(t):   # OutCubic, same as the app
     return 1 - (1 - t) ** 3
 
 
@@ -82,11 +82,11 @@ for f in seq:
         r._display_pct = tgt * f
     frames.append(_to_pil(root.grab()).convert("RGB"))
 
-# paleta consistente (do frame final) -> sem flicker entre frames
+# consistent palette (from the final frame) -> no flicker between frames
 ref = frames[-1].convert("P", palette=Image.Palette.ADAPTIVE, colors=128)
 frames_p = [fr.quantize(palette=ref, dither=Image.Dither.NONE) for fr in frames]
 OUT.mkdir(parents=True, exist_ok=True)
-gif = OUT / "aneis.gif"
+gif = OUT / "rings.gif"
 frames_p[0].save(gif, save_all=True, append_images=frames_p[1:],
                  duration=40, loop=0, optimize=True, disposal=2)
 print("OK", gif, os.path.getsize(gif) // 1024, "KB")

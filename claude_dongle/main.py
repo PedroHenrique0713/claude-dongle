@@ -41,10 +41,10 @@ def cmd_config():
 def cmd_setup():
     from . import autostart
     try:
-        print("Autostart configurado:", autostart.install())
-        print("O dongle sobe no login. Rode 'claude-monitor tray' para abrir já.")
+        print("Autostart configured:", autostart.install())
+        print("The dongle starts on login. Run 'claude-dongle tray' to open it now.")
     except Exception as e:
-        print("Falha ao configurar autostart:", e)
+        print("Failed to set up autostart:", e)
 
 
 def cmd_uninstall():
@@ -52,7 +52,7 @@ def cmd_uninstall():
     try:
         print("Autostart:", autostart.uninstall())
     except Exception as e:
-        print("Falha ao remover autostart:", e)
+        print("Failed to remove autostart:", e)
 
 
 def main():
@@ -61,12 +61,12 @@ def main():
         "config": cmd_config, "setup": cmd_setup, "uninstall": cmd_uninstall,
     }
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
-        print("Uso: claude-monitor [tray|status|notify|config|setup|uninstall]")
-        print("  tray      abre o dongle flutuante (uso normal)")
-        print("  setup     configura o autostart no login (este SO)")
-        print("  uninstall remove o autostart")
-        print("  config    abre só o painel de configuração")
-        print("  status    imprime o uso atual em JSON")
+        print("Usage: claude-dongle [tray|status|notify|config|setup|uninstall]")
+        print("  tray      open the floating dongle (normal use)")
+        print("  setup     set up autostart on login (this OS)")
+        print("  uninstall remove autostart")
+        print("  config    open just the settings panel")
+        print("  status    print the current usage as JSON")
         return
     cmds[sys.argv[1]]()
 

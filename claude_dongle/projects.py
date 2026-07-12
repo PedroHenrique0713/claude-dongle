@@ -1,13 +1,14 @@
-"""Uso por projeto/modelo a partir dos JSONL de ~/.claude/projects.
+"""Per-project/model usage from the JSONL files in ~/.claude/projects.
 
-A OAuth usage API dá o % oficial mas não diz QUAL projeto/modelo queimou a
-semana. Os JSONL de sessão têm `message.usage` por resposta assistant, com
-`model` e `cwd` — dado local complementar (tokens crus, não o % ponderado).
+The OAuth usage API gives the official % but doesn't say WHICH project/model
+burned the week. The session JSONLs have `message.usage` per assistant
+response, with `model` and `cwd` — complementary local data (raw tokens, not
+the weighted %).
 
-Parser incremental por offset de byte (append-only): cada refresh lê só o que
-cresceu desde a última passada, então o custo marginal é ~zero. Se um arquivo
-encolher (rotação/reescrita, raro), faz rebuild completo — a única forma correta
-de não contar em dobro.
+Incremental parser by byte offset (append-only): each refresh reads only what
+grew since the last pass, so the marginal cost is ~zero. If a file shrinks
+(rotation/rewrite, rare), do a full rebuild — the only correct way to avoid
+double counting.
 """
 import json, os, threading
 from datetime import datetime, timedelta
@@ -16,7 +17,7 @@ from pathlib import Path
 from . import history
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
-_lock = threading.Lock()  # serializa refreshes: dois em paralelo recontariam
+_lock = threading.Lock()  # serializes refreshes: two in parallel would recount
 
 
 def _ensure_schema(c):
@@ -50,7 +51,7 @@ def _agg_line(raw, agg):
     if not isinstance(u, dict):
         return
     model = msg.get("model") or "?"
-    if model.startswith("<"):  # <synthetic>: mensagens internas do Claude Code
+    if model.startswith("<"):  # <synthetic>: Claude Code internal messages
         return
     day = (o.get("timestamp") or "")[:10]  # YYYY-MM-DD
     if len(day) != 10:
@@ -64,9 +65,9 @@ def _agg_line(raw, agg):
 
 
 def refresh(full=False):
-    """Lê os JSONL novos e agrega. Retorna nº de linhas processadas. Barato o
-    bastante para o timer de 5s do dashboard (só o que cresceu). Se outro
-    refresh já roda, sai na hora (evita recontagem concorrente)."""
+    """Reads the new JSONL data and aggregates. Returns the number of lines
+    processed. Cheap enough for the dashboard's 5s timer (only what grew). If
+    another refresh is already running, bail out (avoids concurrent recounts)."""
     if not _lock.acquire(blocking=False):
         return 0
     try:
@@ -74,7 +75,7 @@ def refresh(full=False):
         _ensure_schema(c)
         offsets = dict(c.execute("SELECT path, offset FROM jsonl_state").fetchall())
         files = list(PROJECTS_DIR.glob("*/*.jsonl"))
-        if not full:  # arquivo encolheu → append-only violado → rebuild
+        if not full:  # a file shrank → append-only violated → rebuild
             for f in files:
                 try:
                     if f.stat().st_size < offsets.get(str(f), 0):
@@ -142,8 +143,8 @@ def _top(c, group_col, cutoff, limit):
 
 
 def daily(days=14):
-    """Tokens de saída por dia nos últimos `days` dias, cronológico, com 0 nos
-    dias sem uso (para o heatmap ter uma célula por dia)."""
+    """Output tokens per day over the last `days` days, chronological, with 0
+    on days without usage (so the heatmap has one cell per day)."""
     try:
         c = history._conn()
         _ensure_schema(c)
@@ -160,8 +161,8 @@ def daily(days=14):
 
 
 def summary(days=7, limit=8):
-    """Top projetos e modelos dos últimos `days` dias, ordenados por tokens de
-    saída (output = trabalho gerado, o proxy menos inflado que cache_read)."""
+    """Top projects and models of the last `days` days, ordered by output
+    tokens (output = generated work, the least inflated proxy vs cache_read)."""
     try:
         c = history._conn()
         _ensure_schema(c)

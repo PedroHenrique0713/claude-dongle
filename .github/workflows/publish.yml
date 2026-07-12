@@ -1,0 +1,22 @@
+name: Publish to PyPI
+
+# Uses PyPI trusted publishing (no API token): configure this repo +
+# workflow as a publisher for the "claude-dongle" project on pypi.org.
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install build
+      - run: python -m build
+      - uses: pypa/gh-action-pypi-publish@release/v1

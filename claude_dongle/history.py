@@ -1,25 +1,25 @@
 """Usage time series + burn rate + overflow forecast.
 
-Snapshots entram pelo funil único (monitor.calc_usage). A PK
-(metric, window_epoch, ts) torna a gravação idempotente: dongle (30s),
-dashboard (5s) e CLI podem tentar gravar a mesma amostra da API e só o
-primeiro INSERT entra. WAL + busy_timeout cobrem o multi-processo
-(o serviço morre em idle e renasce a cada terminal).
+Snapshots come in through the single funnel (monitor.calc_usage). The PK
+(metric, window_epoch, ts) makes writes idempotent: the dongle (30s), the
+dashboard (5s) and the CLI may all try to record the same API sample and only
+the first INSERT lands. WAL + busy_timeout cover the multi-process case
+(the service dies when idle and is reborn with every terminal).
 """
 import sqlite3, time, threading
 
 from . import config
 
 DB_PATH = config.CONFIG_DIR / "history.db"
-MIN_RATE_PPH = 0.2  # abaixo disso o ritmo é "estável": ETA seria ruído
+MIN_RATE_PPH = 0.2  # below this the pace is "flat": an ETA would be noise
 CLOCK_SKEW_S = 60
 
-# Conexão por thread: o parser de projetos roda num thread próprio e uma mesma
-# conexão sqlite não pode ser usada por dois threads ao mesmo tempo. O WAL
-# permite N conexões (1 escritor + leitores) sobre o mesmo arquivo.
+# One connection per thread: the projects parser runs in its own thread and a
+# single sqlite connection can't be used by two threads at once. WAL allows N
+# connections (1 writer + readers) over the same file.
 _local = threading.local()
 _gc_done = False
-_last_written = {}  # metric -> ts; poupa INSERTs redundantes a cada refresh de 5s
+_last_written = {}  # metric -> ts; saves redundant INSERTs on every 5s refresh
 
 
 def _conn() -> sqlite3.Connection:
@@ -33,9 +33,9 @@ def _conn() -> sqlite3.Connection:
     c.execute("PRAGMA busy_timeout=5000")
     c.execute(
         "CREATE TABLE IF NOT EXISTS snapshots ("
-        " metric TEXT NOT NULL,"          # '5h' | '7d' | '7d:<modelo>'
-        " window_epoch INTEGER NOT NULL,"  # reset epoch da janela (0 = desconhecido)
-        " ts INTEGER NOT NULL,"            # quando o DADO foi obtido (fetched_at)
+        " metric TEXT NOT NULL,"          # '5h' | '7d' | '7d:<model>'
+        " window_epoch INTEGER NOT NULL,"  # window's reset epoch (0 = unknown)
+        " ts INTEGER NOT NULL,"            # when the DATA was fetched (fetched_at)
         " pct REAL NOT NULL,"
         " account TEXT NOT NULL DEFAULT '',"
         " source TEXT NOT NULL DEFAULT 'api',"
@@ -47,8 +47,8 @@ def _conn() -> sqlite3.Connection:
     return c
 
 
-def _metrics_from(usage: dict) -> list[tuple[str, int, float]]:
-    """(metric, window_epoch, pct) por métrica presente no dict do calc_usage."""
+def _metrics_from(usage: dict) -> list:
+    """(metric, window_epoch, pct) for each metric present in calc_usage's dict."""
     out = []
     if usage.get("pct_5h") is not None:
         out.append(("5h", usage.get("reset_5h_epoch") or 0, float(usage["pct_5h"])))
@@ -65,13 +65,13 @@ def _metrics_from(usage: dict) -> list[tuple[str, int, float]]:
                 continue
             out.append((metric, w.get("reset") or 0, float(w["pct"])))
     elif usage.get("pct_7d") is not None:
-        # Fonte sem breakdown (proxy/cache antigo): grava o semanal efetivo.
+        # Source without a breakdown (proxy/old cache): record the effective weekly.
         out.append(("7d", usage.get("reset_7d_epoch") or 0, float(usage["pct_7d"])))
     return out
 
 
 def record(usage: dict) -> None:
-    """Grava um snapshot por métrica. Idempotente; nunca propaga exceção."""
+    """Records one snapshot per metric. Idempotent; never raises."""
     if usage.get("source") == "none" or not usage.get("data_ts"):
         return
     ts = int(usage["data_ts"])
@@ -92,8 +92,8 @@ def record(usage: dict) -> None:
         print(f"history.record: {e}", flush=True)
 
 
-def series(metric: str, window_epoch: int, account: str = "") -> list[tuple[int, float]]:
-    """Pontos (ts, pct) da janela corrente, em ordem cronológica."""
+def series(metric: str, window_epoch: int, account: str = "") -> list:
+    """(ts, pct) points of the current window, in chronological order."""
     try:
         c = _conn()
         rows = c.execute(
@@ -108,10 +108,10 @@ def series(metric: str, window_epoch: int, account: str = "") -> list[tuple[int,
 
 
 def burn_rate(points, now=None, lookback_s=3600, min_points=3, min_span_s=600):
-    """Pontos percentuais por HORA (regressão linear simples), ou None.
+    """Percentage points per HOUR (simple linear regression), or None.
 
-    Regressão em vez de delta entre extremos: com amostra a cada ~300s um
-    ponto ruidoso (ou um pequeno recuo do pct) não inverte o sinal.
+    Regression instead of a delta between endpoints: with a sample every
+    ~300s, one noisy point (or a small pct dip) doesn't flip the sign.
     """
     now = time.time() if now is None else now
     pts = [(t, y) for t, y in points if t >= now - lookback_s]
@@ -132,11 +132,12 @@ def burn_rate(points, now=None, lookback_s=3600, min_points=3, min_span_s=600):
 
 
 def forecast(pct_latest, latest_ts, rate_pph, seconds_until_reset, now=None):
-    """ETA até 100% no ritmo atual e se estoura antes do reset da janela.
+    """ETA to 100% at the current pace, and whether it overflows before the
+    window's reset.
 
-    Sem tendência de subida (rate <= MIN_RATE_PPH) não há previsão de estouro,
-    mesmo já em 100% — nesse caso quem avisa é a notificação de limite, não uma
-    "previsão" de algo que já aconteceu (e parado).
+    With no upward trend (rate <= MIN_RATE_PPH) there is no overflow forecast,
+    even at 100% already — there the limit notification does the warning, not
+    a "forecast" of something that already happened (and stopped).
     """
     now = time.time() if now is None else now
     out = {"rate_pph": rate_pph, "eta_seconds": None, "overflow_before_reset": None}
@@ -151,7 +152,7 @@ def forecast(pct_latest, latest_ts, rate_pph, seconds_until_reset, now=None):
 
 
 def attach_forecasts(usage: dict, cfg: dict) -> dict:
-    """{metric: forecast} para cada métrica do usage. Nunca lança."""
+    """{metric: forecast} for each metric in the usage dict. Never raises."""
     if usage.get("source") == "none":
         return {}
     try:
@@ -171,10 +172,11 @@ def attach_forecasts(usage: dict, cfg: dict) -> dict:
             reset_s = max(0, int(epoch - now)) if epoch else fallback_reset.get(metric)
             fc = forecast(pct, latest_ts, rate, reset_s, now=now)
             fc["points"] = len(pts)
-            # 'alert' = estouro RELEVANTE (o que acende o aviso visual/notificação):
-            # overflow previsto E o balde já passou de um piso. Sem o piso, um burn
-            # rate de curto prazo com pct baixo (ex. Fable a 4%) projeta estouro em
-            # dias e acende o alarme sem ser acionável.
+            # 'alert' = RELEVANT overflow (what lights the visual warning /
+            # notification): a predicted overflow AND the bucket already past a
+            # floor. Without the floor, a short-term burn rate on a low pct
+            # (e.g. a model at 4%) projects an overflow days away and raises a
+            # non-actionable alarm.
             floor = 50 if metric == "5h" else 30
             fc["alert"] = bool(fc.get("overflow_before_reset")) and pct >= floor
             out[metric] = fc

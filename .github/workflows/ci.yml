@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.9", "3.13"]
+        exclude:
+          # actions/setup-python has no 3.9 build for Apple Silicon runners
+          - os: macos-latest
+            python: "3.9"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      # The tested modules are pure stdlib — PyQt6 is only needed by the UI,
+      # which the ui-smoke job covers.
+      - run: pip install pytest
+      - run: python -m compileall claude_dongle tests
+      - run: pytest tests/ -v
+
+  ui-smoke:
+    # Builds the real PyQt6 UI offscreen and renders the README screenshots —
+    # catches import errors and widget construction crashes in the UI layer.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libglib2.0-0t64 libxkbcommon0 \
+            libdbus-1-3 libfontconfig1
+      - run: pip install .
+      - run: QT_QPA_PLATFORM=offscreen python scripts/gen_screenshots.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: docs/*.png
