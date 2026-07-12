@@ -23,10 +23,10 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       # The tested modules are pure stdlib — PyQt6 is only needed by the UI,
-      # which the ui-smoke job covers.
-      - run: pip install pytest
+      # which the ui-smoke job covers, so skip the deps here (--no-deps).
+      - run: pip install pytest && pip install --no-deps -e .
       - run: python -m compileall claude_dongle tests
-      - run: pytest tests/ -v
+      - run: python -m pytest tests/ -v
 
   ui-smoke:
     # Builds the real PyQt6 UI offscreen and renders the README screenshots —
