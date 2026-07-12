@@ -5,10 +5,19 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "claude-monitor"
 version = "1.0.0"
-description = "Monitor de rate limit do Claude Code: dongle flutuante + painel (burn rate, previsão de estouro, uso por projeto)."
+description = "Claude Code rate-limit monitor: floating dongle + dashboard (burn rate, overflow forecast, per-project usage)."
 readme = "README.md"
 requires-python = ">=3.9"
+license = { file = "LICENSE" }
 dependencies = ["PyQt6>=6.5"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Environment :: X11 Applications :: Qt",
+]
 
 [project.urls]
 Repository = "https://github.com/PedroHenrique0713/claude-monitor"

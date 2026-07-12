@@ -2,123 +2,166 @@
 
 # claude-monitor
 
-**Seus limites do Claude Code em tempo real, sem sair do fluxo.**
+**Your Claude Code usage limits, live — without breaking your flow.**
 
-Uma pílula flutuante que mostra quanto você já queimou das janelas de uso — sessão de 5h e semanal por modelo — e prevê quando você vai estourar. Lê tudo do token local do próprio Claude Code: sem proxy, sem login extra, sem enviar nada para lugar nenhum.
+A floating pill that shows how much of your usage windows you've burned
+(5-hour session and weekly, per model) and predicts when you'll hit the wall.
+It reads everything from Claude Code's own local token: no proxy, no extra
+login, nothing sent anywhere.
 
-![dongle](docs/dongle.png)
+<br>
 
-![Linux](https://img.shields.io/badge/Linux-✓-2b2b33) ![macOS](https://img.shields.io/badge/macOS-✓-2b2b33) ![Windows](https://img.shields.io/badge/Windows-✓-2b2b33) ![Python](https://img.shields.io/badge/Python-3.9+-5c8bff)
+<img src="docs/dongle.png" alt="the dongle" width="240">
+
+<br><br>
+
+<a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-5c8bff?style=flat-square" alt="License: MIT"></a>
+<img src="https://img.shields.io/badge/python-3.9%2B-5c8bff?style=flat-square" alt="Python 3.9+">
+<img src="https://img.shields.io/badge/platform-Linux%20·%20macOS%20·%20Windows-2b2b33?style=flat-square" alt="Platforms">
+<img src="https://img.shields.io/badge/UI-PyQt6,%20hand--drawn-2b2b33?style=flat-square" alt="PyQt6">
 
 </div>
 
 ---
 
-## O que faz
+## ✨ Features
 
-- **Dongle sempre à vista** — uma pílula discreta no canto da tela com sessão (5h), semana e semana por modelo. Aparece só quando faz sentido (ex. com o editor ou terminal aberto) e some quando você não está trabalhando.
-- **Previsão de estouro** — calcula seu *burn rate* por regressão sobre o uso recente e estima o ETA até 100%. A borda pisca âmbar quando, no ritmo atual, você estoura antes do reset.
-- **Barra de ritmo** — cada barra tem um marcador de "onde você estaria no ritmo linear". Preenchimento à frente do marcador = queimando adiantado; atrás = folgado. Você lê o ritmo de relance, sem interpretar número.
-- **Uso por projeto e modelo** — a partir dos logs locais do Claude Code, mostra quais projetos e quais modelos consumiram a sua semana (com heatmap dos últimos 14 dias).
-- **Notificações por limite** — avisa ao cruzar seus thresholds e na previsão de estouro. Funciona mesmo com o dongle fechado, via um timer que roda em segundo plano.
-- **Multiplataforma** — Linux, macOS e Windows, com autostart nativo de cada sistema.
+- **Always-on dongle** — a discreet pill in the corner with your session (5h),
+  week, and week-per-model usage. It appears only when it makes sense (e.g. with
+  your editor or terminal open) and hides when you're not working.
+- **Overflow forecast** — computes your *burn rate* by regression over recent
+  usage and estimates the ETA to 100%. The border pulses amber when, at the
+  current pace, you'll run out before the reset.
+- **Pace marker** — every ring has a tick for *where you'd be at a linear pace*.
+  Fill ahead of the tick = burning fast; behind it = comfortable. You read your
+  pace at a glance, no math.
+- **Per-project & per-model usage** — from Claude Code's local logs, it shows
+  which projects and models ate your week (with a 14-day heatmap).
+- **Limit notifications** — alerts when you cross a threshold and on the overflow
+  forecast. Works even with the dongle closed, via a background timer.
+- **Cross-platform** — Linux, macOS and Windows, with native autostart on each.
 
-## Prévia
+## 🖼️ Preview
 
 <div align="center">
-  <img src="docs/aneis.gif" alt="anéis de uso animando" width="440">
+  <img src="docs/aneis.gif" alt="usage rings animating" width="440">
   <br>
-  <em>Os medidores de uso, ao vivo</em>
+  <em>The usage gauges, live</em>
 </div>
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/painel.png" alt="painel"></td>
-    <td width="50%"><img src="docs/painel-completo.png" alt="painel completo"></td>
+    <td width="50%"><img src="docs/painel.png" alt="dashboard"></td>
+    <td width="50%"><img src="docs/painel-completo.png" alt="dashboard, expanded"></td>
   </tr>
   <tr>
-    <td align="center"><em>Painel</em></td>
-    <td align="center"><em>Previsão e uso por projeto expandidos</em></td>
+    <td align="center"><em>Dashboard</em></td>
+    <td align="center"><em>Forecast &amp; per-project usage, expanded</em></td>
   </tr>
 </table>
 
 <div align="center">
-  <img src="docs/notificacoes.png" alt="notificações" width="420">
+  <img src="docs/notificacoes.png" alt="notifications" width="420">
   <br>
-  <em>Avisos de limite e previsão de estouro — funcionam mesmo com o dongle fechado</em>
+  <em>Limit and overflow-forecast alerts — they fire even with the dongle closed</em>
 </div>
 
-## Instalação
+## 📦 Installation
 
-Requisitos: **Python 3.9+** e o **Claude Code** instalado e logado na máquina.
+Requirements: **Python 3.9+** and **Claude Code** installed and logged in on the
+machine.
 
-Com [pipx](https://pipx.pypa.io) (recomendado — instala num ambiente isolado):
+With [pipx](https://pipx.pypa.io) (recommended — installs into an isolated env):
 
 ```bash
 pipx install git+https://github.com/PedroHenrique0713/claude-monitor
 ```
 
-Ou com pip:
+Or with pip:
 
 ```bash
 pip install --user git+https://github.com/PedroHenrique0713/claude-monitor
 ```
 
-Depois:
+Then:
 
 ```bash
-claude-monitor tray      # abre o dongle
-claude-monitor setup     # (opcional) faz subir sozinho no login deste SO
+claude-monitor tray      # open the dongle
+claude-monitor setup     # (optional) launch it automatically on login
 ```
 
-O `setup` configura o autostart do jeito nativo de cada sistema — **systemd user** no Linux, **LaunchAgent** no macOS, **pasta Iniciar** no Windows. Para desfazer: `claude-monitor uninstall`.
+`setup` wires up autostart the native way on each OS — **systemd user** on Linux,
+**LaunchAgent** on macOS, **Startup folder** on Windows. Undo it with
+`claude-monitor uninstall`.
 
-## Uso
+## ⚙️ Usage
 
-| Comando | O que faz |
+| Command | What it does |
 |---|---|
-| `claude-monitor tray` | abre o dongle flutuante (uso normal) |
-| `claude-monitor status` | imprime o estado atual em JSON |
-| `claude-monitor notify` | checa os limites uma vez e notifica |
-| `claude-monitor config` | abre só o painel de configuração |
-| `claude-monitor setup` | configura o autostart no login |
-| `claude-monitor uninstall` | remove o autostart |
+| `claude-monitor tray` | open the floating dongle (normal use) |
+| `claude-monitor status` | print the current state as JSON |
+| `claude-monitor notify` | check the limits once and notify |
+| `claude-monitor config` | open just the settings panel |
+| `claude-monitor setup` | set up autostart on login |
+| `claude-monitor uninstall` | remove autostart |
 
-**Interações do dongle:** arraste para reposicionar (gruda nas bordas); clique para abrir o painel; clique do meio para atualizar na hora.
+**Dongle interactions:** drag to reposition (it snaps to edges); click to open the
+dashboard; middle-click to refresh now.
 
-## Configuração
+## 🔧 Configuration
 
-Ajuste pelo painel ou editando `~/.config/claude-monitor/config.json`:
+Tune it from the panel or by editing `~/.config/claude-monitor/config.json`:
 
-| Chave | Padrão | Descrição |
+| Key | Default | Description |
 |---|---|---|
-| `thresholds` | `[50, 70, 85, 95]` | percentuais que disparam notificação |
-| `show_mode` | `"dev"` | quando mostrar o dongle: `always`, `claude`, `dev` ou `custom` |
-| `poll_interval` | `5` | segundos entre atualizações do dongle |
-| `api_poll_interval` | `300` | intervalo mínimo entre chamadas à API (o endpoint rate-limita polling agressivo) |
-| `dongle_opacity` | `0.85` | opacidade do dongle (0 a 1) |
-| `notify_on_threshold` | `true` | notificar ao cruzar um threshold |
-| `notify_on_limit` | `true` | notificar ao atingir 100% |
-| `forecast_notify` | `true` | notificar previsão de estouro antes do reset |
+| `thresholds` | `[50, 70, 85, 95]` | percentages that trigger a notification |
+| `show_mode` | `"dev"` | when to show the dongle: `always`, `claude`, `dev` or `custom` |
+| `poll_interval` | `5` | seconds between dongle refreshes |
+| `api_poll_interval` | `300` | minimum interval between API calls (the endpoint rate-limits aggressive polling) |
+| `dongle_opacity` | `0.85` | dongle opacity (0 to 1) |
+| `notify_on_threshold` | `true` | notify when a threshold is crossed |
+| `notify_on_limit` | `true` | notify when 100% is reached |
+| `forecast_notify` | `true` | notify on a predicted overflow before the reset |
 
-## Como funciona
+## 🔍 How it works
 
-O Claude Code guarda um token OAuth em `~/.claude/.credentials.json`. O claude-monitor usa esse token para consultar o endpoint oficial de uso da Anthropic (`api.anthropic.com/api/oauth/usage`) — o mesmo que alimenta os avisos de limite do próprio Claude Code. A partir daí:
+Claude Code keeps an OAuth token in `~/.claude/.credentials.json`. claude-monitor
+uses that token to query Anthropic's official usage endpoint
+(`api.anthropic.com/api/oauth/usage`) — the same one that powers Claude Code's own
+limit warnings. From there:
 
-- `monitor` monta o estado; sem fonte real (API fora e sem cache), mostra `--` em vez de inventar número.
-- `history` mantém uma série temporal local (SQLite) para o burn rate e a previsão.
-- `projects` agrega tokens por projeto/modelo lendo os JSONL de `~/.claude/projects`.
-- `dongle` e `dashboard` (PyQt6, desenhados à mão) exibem tudo; `notifier` avisa nos limites.
+- `monitor` assembles the state; with no real source (API down and no cache) it
+  shows `--` instead of inventing a number.
+- `history` keeps a local time series (SQLite) for the burn rate and forecast.
+- `projects` aggregates tokens per project/model by reading the JSONL files in
+  `~/.claude/projects`.
+- `dongle` and `dashboard` (PyQt6, hand-drawn) render everything; `notifier`
+  raises the alerts.
 
-## Privacidade
+## 🔒 Privacy
 
-Tudo é local. O monitor **lê** o token do Claude Code e fala **direto** com a API oficial da Anthropic — nenhum dado é enviado a terceiros, e o token nunca sai da máquina nem é reescrito (o monitor guarda o que precisa em cache próprio, sem tocar no arquivo do Claude Code).
+Everything is local. The monitor **reads** Claude Code's token and talks
+**directly** to Anthropic's official API — no data is sent to any third party, and
+the token never leaves the machine nor gets rewritten (the monitor keeps what it
+needs in its own cache, without touching Claude Code's file).
 
-## Desenvolvimento
+## 🛠️ Development
 
-Rodar do repositório sem instalar:
+Run from the repo without installing:
 
 ```bash
 ./run.sh tray                 # Linux/macOS
-python -m claude_monitor tray # qualquer SO
+python -m claude_monitor tray # any OS
 ```
+
+Regenerate the README assets (rendered by the app itself, offscreen, with
+fictional data):
+
+```bash
+python scripts/gen_screenshots.py   # dongle, dashboard, notifications
+python scripts/gen_gif.py           # the animated usage rings
+```
+
+## 📄 License
+
+MIT © Pedro Henrique — see [LICENSE](LICENSE).
