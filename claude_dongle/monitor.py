@@ -1,4 +1,5 @@
-import json, time, hashlib
+import json
+import time
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
@@ -9,7 +10,8 @@ from . import usage_api
 CLAUDE_JSON = Path.home() / ".claude" / ".claude.json"
 _prev_identity = None
 
-def read_sessions(claude_dir: str) -> list[dict]:
+
+def read_sessions(claude_dir: str) -> list:
     sess_dir = Path(claude_dir) / "sessions"
     if not sess_dir.exists():
         return []
@@ -31,18 +33,13 @@ def read_sessions(claude_dir: str) -> list[dict]:
             continue
     return sessions
 
-CREDENTIALS_JSON = Path.home() / ".claude" / ".credentials.json"
-
 
 def _active_token_tier():
-    """(subscriptionType, rateLimitTier) da conta ATIVA, lidos do token. Mais
-    atual que o oauthAccount, que o Claude Code demora a reescrever ao trocar."""
-    try:
-        d = json.loads(CREDENTIALS_JSON.read_text())
-        o = d.get("claudeAiOauth", d)
-        return o.get("subscriptionType"), o.get("rateLimitTier")
-    except (OSError, json.JSONDecodeError):
-        return None, None
+    """(subscriptionType, rateLimitTier) of the ACTIVE account, read from the
+    stored token — more current than oauthAccount, which Claude Code is slow
+    to rewrite after an account switch."""
+    o = usage_api.claude_oauth()
+    return o.get("subscriptionType"), o.get("rateLimitTier")
 
 
 def get_account_identity() -> dict:
@@ -56,12 +53,12 @@ def get_account_identity() -> dict:
         info["plan"] = oa.get("organizationType") or oa.get("organizationRateLimitTier", "?")
         info["email"] = oa.get("emailAddress")
         info["uuid"] = oa.get("accountUuid", "")
-        # A conta ATIVA vem do token. Se o tier do token diverge do oauthAccount,
-        # o oauthAccount está OBSOLETO (troca de conta que o Claude Code ainda não
-        # reescreveu) → nome/email antigos deixam de ser confiáveis; o plano real
-        # vem do token.
+        # The ACTIVE account comes from the token. If the token's tier diverges
+        # from oauthAccount, oauthAccount is STALE (an account switch Claude
+        # Code hasn't rewritten yet) → the old name/email can't be trusted;
+        # the real plan comes from the token.
         sub, tier = _active_token_tier()
-        info["tier"] = tier  # tier do token: identifica a conta ativa p/ o cache
+        info["tier"] = tier  # token tier: identifies the active account for the cache
         oa_tiers = {oa.get("organizationRateLimitTier"), oa.get("userRateLimitTier")}
         if tier and tier not in oa_tiers:
             info["identity_stale"] = True
@@ -70,7 +67,8 @@ def get_account_identity() -> dict:
         pass
     return info
 
-def detect_account_change() -> tuple[bool, str | None]:
+
+def detect_account_change():
     global _prev_identity
     cur = get_account_identity()
     name = cur.get("account_name")
@@ -86,21 +84,26 @@ def detect_account_change() -> tuple[bool, str | None]:
     _prev_identity = cur
     return changed, name
 
+
 def calc_usage(state: dict) -> dict:
     now = datetime.now(timezone.utc)
     now_ts = time.time()
-    last_reset = _last_reset(state["reset_day"], state["reset_time"], state["reset_timezone"])
-    next_reset = last_reset + timedelta(days=7)
-    seconds_until_reset = int((next_reset - now).total_seconds())
+    # Manual fallback for the weekly reset — only used when the API never gave
+    # a real resets_at. Unconfigured (the default): no guess, the UI shows "--".
+    last_reset = _last_reset(state.get("reset_day"), state.get("reset_time"),
+                             state.get("reset_timezone"))
+    next_reset = last_reset + timedelta(days=7) if last_reset else None
+    seconds_until_reset = (int((next_reset - now).total_seconds())
+                           if next_reset else None)
     seconds_until_reset_5h = None
 
     sessions = read_sessions(state["claude_dir"])
     account = get_account_identity()
     account_changed, _ = detect_account_change()
 
-    # Chave de conta p/ o cache = uuid + tier do token. O tier muda ao trocar de
-    # conta mesmo quando o oauthAccount (uuid) fica obsoleto, então o cache de uso
-    # da conta anterior não vaza para a nova.
+    # Cache account key = uuid + token tier. The tier changes on an account
+    # switch even while oauthAccount (uuid) is stale, so the previous account's
+    # cached usage never leaks into the new one.
     acct_key = account.get("uuid") or ""
     if account.get("tier"):
         acct_key = f"{acct_key}:{account['tier']}"
@@ -131,8 +134,8 @@ def calc_usage(state: dict) -> dict:
         overage = "enabled" if api_data.get("overage_enabled") else None
         data_ts = api_data.get("fetched_at")
     else:
-        # Sem fonte real (API indisponível, sem cache): mostrar "--".
-        # Número inventado na tela é pior que nenhum número.
+        # No real source (API unavailable, no cache): show "--".
+        # An invented number on screen is worse than no number.
         pct_7d = None
         pct_5h = None
         overage = None
@@ -149,14 +152,14 @@ def calc_usage(state: dict) -> dict:
         "source": source,
         "stale": stale,
         "account_changed": account_changed,
-        "account": account.get("account_name", "desconhecida"),
-        "plan": account.get("plan", "desconhecido"),
+        "account": account.get("account_name") or "unknown",
+        "plan": account.get("plan") or "unknown",
         "email": account.get("email", ""),
         "identity_stale": account.get("identity_stale", False),
         "active_sessions": len(active_sessions),
         "idle_sessions": len(idle_sessions),
-        "last_reset": last_reset.isoformat(),
-        "next_reset": next_reset.isoformat(),
+        "last_reset": last_reset.isoformat() if last_reset else None,
+        "next_reset": next_reset.isoformat() if next_reset else None,
         "seconds_until_reset": seconds_until_reset,
         "seconds_until_reset_5h": seconds_until_reset_5h,
         "reset_7d_epoch": reset_7d_epoch,
@@ -171,7 +174,7 @@ def calc_usage(state: dict) -> dict:
         result["stale_age_seconds"] = stale_age
     if overage:
         result["overage_status"] = overage
-    # Histórico/previsão jamais derrubam o funil de uso.
+    # History/forecast must never take down the usage pipeline.
     try:
         history.record(result)
         fc = history.attach_forecasts(result, state)
@@ -182,14 +185,22 @@ def calc_usage(state: dict) -> dict:
         traceback.print_exc()
     return result
 
-def _last_reset(day: str, time_str: str, tz_name: str) -> datetime:
+
+def _last_reset(day, time_str, tz_name):
+    """Most recent manual weekly reset, or None when not configured.
+    tz_name None = system local timezone."""
+    if not day or not time_str:
+        return None
     days_map = {
         "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
         "friday": 4, "saturday": 5, "sunday": 6,
     }
-    tz = ZoneInfo(tz_name)
-    now = datetime.now(tz)
-    h, m = map(int, time_str.split(":"))
+    try:
+        tz = ZoneInfo(tz_name) if tz_name else datetime.now().astimezone().tzinfo
+        now = datetime.now(tz)
+        h, m = map(int, time_str.split(":"))
+    except (ValueError, KeyError, OSError):
+        return None
     target_dow = days_map.get(day.lower(), 3)
     days_ago = (now.weekday() - target_dow) % 7
     if days_ago == 0 and (now.hour, now.minute) < (h, m):

@@ -1,7 +1,7 @@
 import os, sys
-# XCB só no Linux: PyQt6 em Wayland nativo quebra o posicionamento de janelas
-# frameless. Em Windows/macOS a plataforma nativa é a correta — forçar xcb lá
-# impediria o app de abrir. Setar antes do primeiro import de PyQt6.
+# XCB only on Linux: PyQt6 on native Wayland breaks the positioning of frameless
+# windows. On Windows/macOS the native platform is the right one — forcing xcb
+# there would keep the app from opening. Set before the first PyQt6 import.
 if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
@@ -19,7 +19,7 @@ def get_app():
         _app = QApplication([])
         _app.setQuitOnLastWindowClosed(False)
         _app.setStyle("Fusion")
-        _app.setFont(QFont(UI_FONT, 10))  # fonte de UI da plataforma
+        _app.setFont(QFont(UI_FONT, 10))  # platform UI font
     return _app
 
 
@@ -31,7 +31,7 @@ def run(cfg):
 
 
 class Dashboard:
-    """Compat p/ `main.py config`: abre o dashboard sem dongle."""
+    """Compat for `main.py config`: opens the dashboard without the dongle."""
 
     def __init__(self, cfg):
         get_app()

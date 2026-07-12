@@ -1,49 +1,49 @@
 #!/usr/bin/env python3
-"""Gera as screenshots do README com dados FICTÍCIOS, offscreen.
+"""Generates the README screenshots with FAKE data, offscreen.
 
-Regenera docs/{dongle,painel,painel-completo,notificacoes}.png pelo próprio
-renderer do app (pixel-fiel), trocando conta/e-mail/projetos reais por dados
-anônimos — para nunca vazar PII em capturas de um repo que pode ir a público.
+Regenerates docs/{dongle,dashboard,dashboard-full,notifications}.png through the
+app's own renderer (pixel-faithful), swapping real account/email/projects for
+anonymous data — so no PII ever leaks into captures of a repo that may go public.
 
-Uso:
-    python scripts/gen_screenshots.py            # escreve em docs/
-    python scripts/gen_screenshots.py /tmp/out   # escreve em outro diretório
+Usage:
+    python scripts/gen_screenshots.py            # writes into docs/
+    python scripts/gen_screenshots.py /tmp/out   # writes into another directory
 
-Edite as constantes FAKE_* abaixo para mudar os dados exibidos.
+Edit the FAKE_* constants below to change the displayed data.
 
-Nota (gotcha caro): instanciar o dongle/dashboard chama poll()/_refresh(), que
-dispara notify-send REAL. Este script neutraliza notifier/monitor/projects/
-history ANTES de instanciar qualquer widget — nada de rede, de leitura do
-~/.claude real, de escrita no config do usuário, nem de notificação na tela.
+Note (costly gotcha): instantiating the dongle/dashboard calls poll()/_refresh(),
+which fires a REAL notify-send. This script neutralizes notifier/monitor/projects/
+history BEFORE instantiating any widget — no network, no reading the real
+~/.claude, no writing to the user's config, no on-screen notification.
 """
 import os, sys, time
-os.environ["QT_QPA_PLATFORM"] = "offscreen"   # antes de qualquer import de Qt
+os.environ["QT_QPA_PLATFORM"] = "offscreen"   # before any Qt import
 
 from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else REPO / "docs"
 
-# --- dados fictícios (edite à vontade) ---------------------------------------
+# --- fake data (edit freely) --------------------------------------------------
 FAKE_ACCOUNT = "Alex Doe"
-FAKE_EMAIL = "alex@exemplo.com"
+FAKE_EMAIL = "alex@example.com"
 FAKE_PLAN = "max"
 FAKE_PROJECTS = [
-    {"name": "meu-app",            "output": 16_500_000, "total": 132_000_000},
+    {"name": "my-app",             "output": 16_500_000, "total": 132_000_000},
     {"name": "api-backend",        "output":  4_000_000, "total":  32_000_000},
-    {"name": "site-institucional", "output":    623_000, "total":   5_000_000},
+    {"name": "company-site",       "output":    623_000, "total":   5_000_000},
     {"name": "scripts",            "output":    491_000, "total":   3_900_000},
     {"name": "landing-page",       "output":    358_000, "total":   2_800_000},
-    {"name": "notas",              "output":    332_000, "total":   2_600_000},
+    {"name": "notes",              "output":    332_000, "total":   2_600_000},
     {"name": "cli-tool",           "output":    300_000, "total":   2_400_000},
-    {"name": "prototipo",          "output":    187_000, "total":   1_500_000},
+    {"name": "prototype",          "output":    187_000, "total":   1_500_000},
 ]
 FAKE_MODELS = [
     {"name": "claude-opus-4-8",  "output": 16_100_000, "total": 128_000_000},
     {"name": "claude-fable-5",   "output":  7_000_000, "total":  56_000_000},
     {"name": "claude-sonnet-5",  "output":  1_100_000, "total":   8_800_000},
 ]
-HEAT = [2, 3, 4, 3, 1, 5, 4, 2, 0, 3, 4, 5, 3, 7]   # intensidade por dia (heatmap)
+HEAT = [2, 3, 4, 3, 1, 5, 4, 2, 0, 3, 4, 5, 3, 7]   # per-day intensity (heatmap)
 
 NOW = time.time()
 RESET_5H = NOW + 8700       # 2h25
@@ -72,16 +72,16 @@ FAKE_U = {
     },
 }
 
-# textos idênticos aos emitidos em notifier.py (check_thresholds / forecast)
+# texts identical to those emitted in notifier.py (check_thresholds / forecast)
 FAKE_NOTIFS = [
-    ("Sessão 5h · 85%", "Reinicia em 2h25"),
-    ("Semana Fable · previsão de estouro",
-     "58% agora · +3.0 p.p./h · estoura em 13h53, antes do reinício em 3d 16h53"),
-    ("Semana geral · 70%", "Reinicia em 3d 16h52"),
+    ("5h session · 85%", "Resets in 2h25"),
+    ("Fable week · overflow forecast",
+     "58% now · +3.0 p.p./h · overflows in 13h53, before the reset in 3d 16h53"),
+    ("Overall week · 70%", "Resets in 3d 16h52"),
 ]
 
-# --- neutraliza tudo que sai da máquina / grava / notifica -------------------
-from claude_monitor import monitor, projects, history, notifier, config
+# --- neutralize everything that leaves the machine / writes / notifies -------
+from claude_dongle import monitor, projects, history, notifier, config
 
 notifier.send = lambda *a, **k: None
 notifier.check_thresholds = lambda *a, **k: False
@@ -112,22 +112,22 @@ from PyQt6.QtCore import Qt, QRectF, QRect
 
 app = QApplication(sys.argv[:1])
 
-from claude_monitor.dongle import DongleWidget, DONGLE_W, DONGLE_H
-from claude_monitor.dashboard_ui import DashboardWidget
-from claude_monitor.utils import UI_FONT, ACCENT, ACCENT2
+from claude_dongle.dongle import DongleWidget, DONGLE_W, DONGLE_H
+from claude_dongle.dashboard_ui import DashboardWidget
+from claude_dongle.utils import UI_FONT, ACCENT, ACCENT2
 
 
 def _cfg(**over):
-    c = dict(config.DEFAULTS)          # show_mode="dev" → radio "Só com VS Code / terminal"
+    c = dict(config.DEFAULTS)          # show_mode="dev" → "Only with VS Code / terminal" radio
     c.update(dongle_opacity=1.0, dongle_pos=None)
     c.update(over)
     return c
 
 
 def gen_app_shots():
-    # dongle (RGB opaco 216x36, como o original; canto = cor de baixo do gradiente)
-    d = DongleWidget(_cfg(show_mode="always"))   # always: não se esconde no grab
-    d._overflow = False                          # borda limpa, sem pulso âmbar
+    # dongle (opaque RGB 216x36, like the original; corner = gradient bottom color)
+    d = DongleWidget(_cfg(show_mode="always"))   # always: doesn't hide during the grab
+    d._overflow = False                          # clean border, no amber pulse
     d._critical = False
     d.update(); app.processEvents()
     pm = QPixmap(DONGLE_W, DONGLE_H)
@@ -135,17 +135,17 @@ def gen_app_shots():
     d.render(pm)
     pm.save(str(OUT / "dongle.png"))
 
-    for name, over in (("painel", dict(forecast_expanded=False, projects_expanded=False)),
-                       ("painel-completo", dict(forecast_expanded=True, projects_expanded=True))):
+    for name, over in (("dashboard", dict(forecast_expanded=False, projects_expanded=False)),
+                       ("dashboard-full", dict(forecast_expanded=True, projects_expanded=True))):
         w = DashboardWidget(_cfg(**over))
         w.show(); app.processEvents(); w.adjustSize(); app.processEvents()
         w.grab().save(str(OUT / f"{name}.png"))
         w.close(); app.processEvents()
-    print("app shots:", "dongle painel painel-completo")
+    print("app shots:", "dongle dashboard dashboard-full")
 
 
 def gen_notifs():
-    """Mockup dos toasts do GNOME (Cantarell, cards arredondados, ícone da marca)."""
+    """Mockup of the GNOME toasts (Cantarell, rounded cards, brand icon)."""
     SCALE = 2
     W = 392
     CARD_X, CARD_W = 8, 392 - 16
@@ -197,7 +197,7 @@ def gen_notifs():
         p.drawText(QRectF(tx, y + PAD_T + 1, TXT_W, 16),
                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "Claude Monitor")
         p.drawText(QRectF(tx, y + PAD_T + 1, TXT_W, 16),
-                   Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, "agora")
+                   Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, "now")
         ty = y + PAD_T + 16 + 6
         p.setFont(f_title); p.setPen(QPen(C_TITLE))
         p.drawText(QRectF(tx, ty, TXT_W, fm_title.height()),
@@ -210,8 +210,8 @@ def gen_notifs():
         y += ch + GAP
     p.end()
     pm.setDevicePixelRatio(SCALE)
-    pm.save(str(OUT / "notificacoes.png"))
-    print("notifs:", "notificacoes")
+    pm.save(str(OUT / "notifications.png"))
+    print("notifs:", "notifications")
 
 
 if __name__ == "__main__":

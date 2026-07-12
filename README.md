@@ -1,6 +1,6 @@
 <div align="center">
 
-# claude-monitor
+# claude-dongle
 
 **Your Claude Code usage limits, live — without breaking your flow.**
 
@@ -24,6 +24,11 @@ login, nothing sent anywhere.
 
 ---
 
+> **Unofficial.** This project is not affiliated with Anthropic. It reads the
+> same undocumented usage endpoint that powers Claude Code's own limit
+> warnings (`api.anthropic.com/api/oauth/usage`) — if Anthropic changes it,
+> the monitor may stop showing data until updated.
+
 ## ✨ Features
 
 - **Always-on dongle** — a discreet pill in the corner with your session (5h),
@@ -44,15 +49,15 @@ login, nothing sent anywhere.
 ## 🖼️ Preview
 
 <div align="center">
-  <img src="docs/aneis.gif" alt="usage rings animating" width="440">
+  <img src="docs/rings.gif" alt="usage rings animating" width="440">
   <br>
   <em>The usage gauges, live</em>
 </div>
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/painel.png" alt="dashboard"></td>
-    <td width="50%"><img src="docs/painel-completo.png" alt="dashboard, expanded"></td>
+    <td width="50%"><img src="docs/dashboard.png" alt="dashboard"></td>
+    <td width="50%"><img src="docs/dashboard-full.png" alt="dashboard, expanded"></td>
   </tr>
   <tr>
     <td align="center"><em>Dashboard</em></td>
@@ -61,7 +66,7 @@ login, nothing sent anywhere.
 </table>
 
 <div align="center">
-  <img src="docs/notificacoes.png" alt="notifications" width="420">
+  <img src="docs/notifications.png" alt="notifications" width="420">
   <br>
   <em>Limit and overflow-forecast alerts — they fire even with the dongle closed</em>
 </div>
@@ -74,43 +79,43 @@ machine.
 With [pipx](https://pipx.pypa.io) (recommended — installs into an isolated env):
 
 ```bash
-pipx install git+https://github.com/PedroHenrique0713/claude-monitor
+pipx install git+https://github.com/PedroHenrique0713/claude-dongle
 ```
 
 Or with pip:
 
 ```bash
-pip install --user git+https://github.com/PedroHenrique0713/claude-monitor
+pip install --user git+https://github.com/PedroHenrique0713/claude-dongle
 ```
 
 Then:
 
 ```bash
-claude-monitor tray      # open the dongle
-claude-monitor setup     # (optional) launch it automatically on login
+claude-dongle tray      # open the dongle
+claude-dongle setup     # (optional) launch it automatically on login
 ```
 
 `setup` wires up autostart the native way on each OS — **systemd user** on Linux,
 **LaunchAgent** on macOS, **Startup folder** on Windows. Undo it with
-`claude-monitor uninstall`.
+`claude-dongle uninstall`.
 
 ## ⚙️ Usage
 
 | Command | What it does |
 |---|---|
-| `claude-monitor tray` | open the floating dongle (normal use) |
-| `claude-monitor status` | print the current state as JSON |
-| `claude-monitor notify` | check the limits once and notify |
-| `claude-monitor config` | open just the settings panel |
-| `claude-monitor setup` | set up autostart on login |
-| `claude-monitor uninstall` | remove autostart |
+| `claude-dongle tray` | open the floating dongle (normal use) |
+| `claude-dongle status` | print the current state as JSON |
+| `claude-dongle notify` | check the limits once and notify |
+| `claude-dongle config` | open just the settings panel |
+| `claude-dongle setup` | set up autostart on login |
+| `claude-dongle uninstall` | remove autostart |
 
 **Dongle interactions:** drag to reposition (it snaps to edges); click to open the
 dashboard; middle-click to refresh now.
 
 ## 🔧 Configuration
 
-Tune it from the panel or by editing `~/.config/claude-monitor/config.json`:
+Tune it from the panel or by editing `~/.config/claude-dongle/config.json`:
 
 | Key | Default | Description |
 |---|---|---|
@@ -122,11 +127,12 @@ Tune it from the panel or by editing `~/.config/claude-monitor/config.json`:
 | `notify_on_threshold` | `true` | notify when a threshold is crossed |
 | `notify_on_limit` | `true` | notify when 100% is reached |
 | `forecast_notify` | `true` | notify on a predicted overflow before the reset |
+| `reset_day` / `reset_time` / `reset_timezone` | `null` | manual weekly-reset fallback, used only if the API never answered (`null` timezone = system local) |
 
 ## 🔍 How it works
 
-Claude Code keeps an OAuth token in `~/.claude/.credentials.json`. claude-monitor
-uses that token to query Anthropic's official usage endpoint
+Claude Code keeps an OAuth token in `~/.claude/.credentials.json` (on macOS, in
+the Keychain). claude-dongle uses that token to query Anthropic's usage endpoint
 (`api.anthropic.com/api/oauth/usage`) — the same one that powers Claude Code's own
 limit warnings. From there:
 
@@ -143,7 +149,8 @@ limit warnings. From there:
 Everything is local. The monitor **reads** Claude Code's token and talks
 **directly** to Anthropic's official API — no data is sent to any third party, and
 the token never leaves the machine nor gets rewritten (the monitor keeps what it
-needs in its own cache, without touching Claude Code's file).
+needs in its own cache, with owner-only file permissions, without touching Claude
+Code's file).
 
 ## 🛠️ Development
 
@@ -151,7 +158,14 @@ Run from the repo without installing:
 
 ```bash
 ./run.sh tray                 # Linux/macOS
-python -m claude_monitor tray # any OS
+python -m claude_dongle tray  # any OS
+```
+
+Run the tests:
+
+```bash
+pip install pytest
+pytest tests/
 ```
 
 Regenerate the README assets (rendered by the app itself, offscreen, with

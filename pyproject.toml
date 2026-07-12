@@ -3,13 +3,14 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "claude-monitor"
+name = "claude-dongle"
 version = "1.0.0"
 description = "Claude Code rate-limit monitor: floating dongle + dashboard (burn rate, overflow forecast, per-project usage)."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { file = "LICENSE" }
 dependencies = ["PyQt6>=6.5"]
+keywords = ["claude", "claude-code", "usage", "rate-limit", "monitor", "tray"]
 classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
@@ -20,10 +21,11 @@ classifiers = [
 ]
 
 [project.urls]
-Repository = "https://github.com/PedroHenrique0713/claude-monitor"
+Repository = "https://github.com/PedroHenrique0713/claude-dongle"
+Issues = "https://github.com/PedroHenrique0713/claude-dongle/issues"
 
 [project.scripts]
-claude-monitor = "claude_monitor.main:main"
+claude-dongle = "claude_dongle.main:main"
 
 [tool.setuptools]
-packages = ["claude_monitor"]
+packages = ["claude_dongle"]

@@ -1,21 +1,31 @@
-import json, time, urllib.request, urllib.error
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.request
+import urllib.error
 from datetime import datetime
 from pathlib import Path
 
 from . import config
 
 CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
+# On macOS, Claude Code stores its credentials in the Keychain under this
+# service name instead of (or in addition to) ~/.claude/.credentials.json.
+MAC_KEYCHAIN_SERVICE = "Claude Code-credentials"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 CACHE_PATH = config.CONFIG_DIR / "usage_cache.json"
-# Cache próprio do token renovado — o monitor NUNCA grava no .credentials.json
-# do Claude Code (evita corrida/corrupção do arquivo que o Claude Code é dono).
+# The monitor's own cache for refreshed tokens — it NEVER writes to Claude
+# Code's .credentials.json (avoids racing/corrupting a file Claude Code owns).
 TOKEN_CACHE_PATH = config.CONFIG_DIR / "token_cache.json"
-# Endpoint e client_id validados 2026-07-10 com um refreshToken fake: o servidor
-# respondeu invalid_grant (entendeu grant_type/client_id/formato). console.* dá
-# 404/Cloudflare; o correto é api.anthropic.com sem User-Agent especial.
+# Endpoint and client_id validated 2026-07-10 with a fake refreshToken: the
+# server answered invalid_grant (it understood grant_type/client_id/format).
+# console.* gives 404/Cloudflare; the right host is api.anthropic.com with no
+# special User-Agent.
 OAUTH_TOKEN_URL = "https://api.anthropic.com/v1/oauth/token"
-OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-TOKEN_SKEW = 60  # renova com 60s de folga antes do expiresAt
+OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"  # Claude Code's public client id
+TOKEN_SKEW = 60  # refresh 60s before expiresAt
 
 _cache = {"data": None, "fetched_at": 0, "next_try": 0, "account": None}
 _disk_checked = False
@@ -28,13 +38,39 @@ def _load_json(path):
         return {}
 
 
-def _claude_oauth():
+def _write_private(path: Path, text: str):
+    """Write a file containing token material with owner-only permissions."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _mac_keychain_oauth():
+    """Claude Code credentials from the macOS Keychain, or {}."""
+    try:
+        out = subprocess.check_output(
+            ["security", "find-generic-password", "-s", MAC_KEYCHAIN_SERVICE, "-w"],
+            text=True, timeout=5, stderr=subprocess.DEVNULL)
+        d = json.loads(out)
+        return d.get("claudeAiOauth", d) if isinstance(d, dict) else {}
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError):
+        return {}
+
+
+def claude_oauth():
+    """Claude Code's stored OAuth blob: credentials file, then macOS Keychain."""
     d = _load_json(CREDENTIALS_PATH)
-    return d.get("claudeAiOauth", d) if isinstance(d, dict) else {}
+    oauth = d.get("claudeAiOauth", d) if isinstance(d, dict) else {}
+    if not oauth.get("accessToken") and sys.platform == "darwin":
+        oauth = _mac_keychain_oauth() or oauth
+    return oauth
 
 
 def _valid_access(oauth):
-    """accessToken se presente e não perto de expirar, senão None."""
+    """accessToken if present and not about to expire, else None."""
     tok = oauth.get("accessToken") if isinstance(oauth, dict) else None
     exp = oauth.get("expiresAt", 0) if isinstance(oauth, dict) else 0
     if tok and (not exp or exp / 1000 > time.time() + TOKEN_SKEW):
@@ -43,9 +79,9 @@ def _valid_access(oauth):
 
 
 def _refresh_token(refresh_token):
-    """Troca o refreshToken por um accessToken novo via OAuth. Devolve o dict do
-    cache próprio {access_token, expires_at, refresh_token} ou None. NÃO grava no
-    arquivo do Claude Code."""
+    """Exchange the refreshToken for a new accessToken via OAuth. Returns the
+    monitor's own cache dict {access_token, expires_at, refresh_token} or None.
+    Does NOT write to Claude Code's file."""
     body = json.dumps({
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
@@ -70,30 +106,31 @@ def _refresh_token(refresh_token):
 
 
 def _read_token():
-    """Token para a usage API, resiliente ao Claude Code fechado. Ordem:
-    (1) accessToken válido do Claude Code; (2) cache próprio válido;
-    (3) refresh só com um refreshToken PRÓPRIO. Nunca escreve no .credentials.json.
+    """Token for the usage API, resilient to Claude Code being closed. Order:
+    (1) valid accessToken from Claude Code; (2) valid own cache;
+    (3) refresh, but only with an OWN refreshToken. Never writes to
+    .credentials.json.
 
-    IMPORTANTE (verificado 2026-07-10): o Anthropic ROTACIONA o refreshToken a
-    cada refresh. Se o monitor usasse o refreshToken do Claude Code, o
-    invalidaria e deslogaria a sessão dele. Por isso NÃO recorremos ao token do
-    Claude Code — só refrescamos com um refreshToken próprio no cache (que hoje
-    nada semeia automaticamente, então o refresh fica inerte e seguro)."""
-    tok = _valid_access(_claude_oauth())
+    IMPORTANT (verified 2026-07-10): Anthropic ROTATES the refreshToken on
+    every refresh. If the monitor used Claude Code's refreshToken it would
+    invalidate it and log Claude Code's session out. That's why we never fall
+    back to Claude Code's token — we only refresh with our own cached
+    refreshToken (which nothing seeds automatically today, so the refresh
+    path stays inert and safe)."""
+    tok = _valid_access(claude_oauth())
     if tok:
         return tok
     cache = _load_json(TOKEN_CACHE_PATH)
     if cache.get("access_token") and cache.get("expires_at", 0) > time.time() + TOKEN_SKEW:
         return cache["access_token"]
-    rt = cache.get("refresh_token")  # NUNCA o do Claude Code (rotaciona → desloga)
+    rt = cache.get("refresh_token")  # NEVER Claude Code's (rotates → logs it out)
     if not rt:
         return None
     new = _refresh_token(rt)
     if not new:
         return None
     try:
-        TOKEN_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        TOKEN_CACHE_PATH.write_text(json.dumps(new))
+        _write_private(TOKEN_CACHE_PATH, json.dumps(new))
     except OSError:
         pass
     return new["access_token"]
@@ -148,25 +185,25 @@ def _normalize(body):
 
 
 def _load_disk():
-    # Sobrevive a restart e desduplica entre processos: o último dado real
-    # fica em disco e qualquer processo novo parte dele em vez da rede.
+    # Survives restarts and dedupes across processes: the last real data point
+    # lives on disk and any new process starts from it instead of the network.
     global _disk_checked
     if _disk_checked:
         return
     _disk_checked = True
     try:
         d = json.loads(CACHE_PATH.read_text())
-        d["data"].setdefault("fetched_at", d["fetched_at"])  # cache de versão antiga
+        d["data"].setdefault("fetched_at", d["fetched_at"])  # old-version cache
         _cache["data"] = d["data"]
         _cache["fetched_at"] = d["fetched_at"]
-        _cache["account"] = d.get("account")  # None em cache de versão antiga
+        _cache["account"] = d.get("account")  # None in old-version cache
     except (OSError, json.JSONDecodeError, KeyError, AttributeError):
         pass
 
 
 def invalidate():
-    """Força o próximo fetch a ir à rede (ignora o min_interval). Respeita o
-    backoff de 429 ativo — não re-dispara um endpoint que acabou de nos limitar."""
+    """Force the next fetch to hit the network (ignores min_interval). Respects
+    an active 429 backoff — never re-fires an endpoint that just limited us."""
     _cache["fetched_at"] = 0
 
 
@@ -185,18 +222,19 @@ def fetch(min_interval=60, account=None):
     now = time.time()
     if _cache["data"] is None:
         _load_disk()
-    # Conta trocou: o dado cacheado (memória ou disco, compartilhado entre
-    # contas) é de OUTRA conta. Descartar em vez de exibir uso alheio — número
-    # de outra conta é pior que "--". Cache sem carimbo (None, versão antiga)
-    # é tratado como compatível até o próximo fetch o carimbar.
+    # Account switched: the cached data (memory or disk, shared across
+    # accounts) belongs to ANOTHER account. Drop it rather than show someone
+    # else's usage — a wrong number is worse than "--". A cache without a
+    # stamp (None, old version) is treated as compatible until the next fetch
+    # stamps it.
     if account is not None and _cache["account"] not in (None, account):
         _cache["data"] = None
         _cache["account"] = None
         _cache["next_try"] = 0
     if _cache["data"] is not None and now - _cache["fetched_at"] < min_interval:
         return _cache["data"]
-    # Backoff também sobre tentativas falhas, senão cada poll (dongle 30s,
-    # dashboard 5s) re-dispara a request e alimenta o próprio 429.
+    # Back off on failed attempts too, otherwise every poll (dongle 30s,
+    # dashboard 5s) re-fires the request and feeds its own 429.
     if now < _cache["next_try"]:
         return _stale()
     token = _read_token()
@@ -212,7 +250,7 @@ def fetch(min_interval=60, account=None):
         with urllib.request.urlopen(req, timeout=10) as r:
             body = json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
-        # 429 tem janela longa e retry renova a penalidade: espaçar bem
+        # 429 windows are long and retrying renews the penalty: space out well
         _cache["next_try"] = now + (900 if e.code == 429 else min_interval)
         return _stale()
     except (urllib.error.URLError, json.JSONDecodeError, OSError):
@@ -222,14 +260,13 @@ def fetch(min_interval=60, account=None):
     if data.get("pct_7d") is None and data.get("pct_5h") is None:
         _cache["next_try"] = now + min_interval
         return _stale()
-    data["fetched_at"] = now  # carimbo do dado; o histórico deduplica por ele
+    data["fetched_at"] = now  # data timestamp; history dedupes by it
     _cache["data"] = data
     _cache["fetched_at"] = now
     _cache["next_try"] = 0
     _cache["account"] = account
     try:
-        CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CACHE_PATH.write_text(json.dumps(
+        _write_private(CACHE_PATH, json.dumps(
             {"data": data, "fetched_at": now, "account": account}))
     except OSError:
         pass
