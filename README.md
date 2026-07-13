@@ -79,14 +79,23 @@ machine.
 With [pipx](https://pipx.pypa.io) (recommended — installs into an isolated env):
 
 ```bash
-pipx install git+https://github.com/PedroHenrique0713/claude-dongle
+pipx install claude-dongle
 ```
 
 Or with pip:
 
 ```bash
-pip install --user git+https://github.com/PedroHenrique0713/claude-dongle
+pip install --user claude-dongle
 ```
+
+<details>
+<summary>Install the latest unreleased version from source</summary>
+
+```bash
+pipx install git+https://github.com/PedroHenrique0713/claude-dongle
+```
+
+</details>
 
 Then:
 
