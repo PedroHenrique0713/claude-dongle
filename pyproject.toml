@@ -12,15 +12,19 @@ license = { file = "LICENSE" }
 dependencies = ["PyQt6>=6.5"]
 keywords = ["claude", "claude-code", "usage", "rate-limit", "monitor", "tray"]
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
     "Environment :: X11 Applications :: Qt",
+    "Topic :: Utilities",
 ]
 
 [project.urls]
+Homepage = "https://github.com/PedroHenrique0713/claude-dongle"
 Repository = "https://github.com/PedroHenrique0713/claude-dongle"
 Issues = "https://github.com/PedroHenrique0713/claude-dongle/issues"
 
