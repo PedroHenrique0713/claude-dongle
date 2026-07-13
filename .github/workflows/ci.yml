@@ -18,8 +18,8 @@ jobs:
             python: "3.9"
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       # The tested modules are pure stdlib — PyQt6 is only needed by the UI,
@@ -33,8 +33,8 @@ jobs:
     # catches import errors and widget construction crashes in the UI layer.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
       - run: |
@@ -43,7 +43,7 @@ jobs:
             libdbus-1-3 libfontconfig1
       - run: pip install .
       - run: QT_QPA_PLATFORM=offscreen python scripts/gen_screenshots.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: screenshots
           path: docs/*.png
