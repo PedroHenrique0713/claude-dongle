@@ -1,5 +1,7 @@
 import sys
 
+from .i18n import t as _t
+
 # Platform + native UI font (Cantarell is GNOME's; it looks off outside Linux)
 IS_LINUX = sys.platform.startswith("linux")
 IS_MAC = sys.platform == "darwin"
@@ -42,7 +44,7 @@ def fmt_time(seconds):
     if seconds is None:
         return "--"
     if seconds <= 0:
-        return "now"
+        return _t("time.now")
     hours = seconds // 3600
     mins = (seconds % 3600) // 60
     if hours >= 24:

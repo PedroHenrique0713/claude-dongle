@@ -81,7 +81,11 @@ FAKE_NOTIFS = [
 ]
 
 # --- neutralize everything that leaves the machine / writes / notifies -------
-from claude_dongle import monitor, projects, history, notifier, config
+from claude_dongle import monitor, projects, history, notifier, config, i18n
+
+# The README is in English; without this the shots would follow the
+# machine's locale (pt_BR here).
+i18n.set_language("en")
 
 notifier.send = lambda *a, **k: None
 notifier.check_thresholds = lambda *a, **k: False
@@ -119,7 +123,7 @@ from claude_dongle.utils import UI_FONT, ACCENT, ACCENT2
 
 def _cfg(**over):
     c = dict(config.DEFAULTS)          # show_mode="dev" → "Only with VS Code / terminal" radio
-    c.update(dongle_opacity=1.0, dongle_pos=None)
+    c.update(dongle_opacity=1.0, dongle_pos=None, language="en")
     c.update(over)
     return c
 

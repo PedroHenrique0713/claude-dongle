@@ -2,7 +2,8 @@ import os, sys, time, threading, math
 if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
-from . import monitor, config, history, projects, notifier
+from . import monitor, config, history, projects, notifier, i18n
+from .i18n import t as _t
 from .utils import (color, fmt_time, RED, ORANGE, GREEN, BG, BG2, BG3, FG, FG2, FG3, SEP,
                    ACCENT, ACCENT2, SURFACE, SURFACE_HI, UI_FONT, UI_FONT_STACK)
 
@@ -27,15 +28,15 @@ REFRESH_MS = 5000
 TICK_MS = 1000          # live countdown (only recomputes time texts)
 WINDOW_5H = 5 * 3600    # window durations, for the pace bar
 WINDOW_7D = 7 * 86400
-SOURCE_LABELS = {"api": "official API", "none": "no data"}
+# Built per render: the language can change while the panel is open.
+def _source_label(src):
+    return {"api": _t("src.api"), "none": _t("src.none")}.get(src, src or "?")
 # Same file the dongle and the systemd timer write notification state to.
 SENT_PATH = config.CONFIG_DIR / "sent_thresholds.json"
 # animations only in real use; offscreen (screenshots/headless) paints the final state
 _ANIMATE = os.environ.get("QT_QPA_PLATFORM") != "offscreen"
-SHOW_MODES = [("Always visible", "always"),
-              ("Only with Claude Code", "claude"),
-              ("Only with VS Code / terminal", "dev"),
-              ("Specific processes", "custom")]
+SHOW_MODES = [("vis.always", "always"), ("vis.claude", "claude"),
+              ("vis.dev", "dev"), ("vis.custom", "custom")]
 
 
 def _rgba(hex_color, alpha):
@@ -233,11 +234,11 @@ class UsageRing(QWidget):
         if pace is not None and not stale:  # usage vs. elapsed time
             expected = pace * 100
             if pct > expected + 8:
-                sub += "  ·  high"
+                sub += "  ·  " + _t("pace.high")
             elif pct < expected - 8:
-                sub += "  ·  low"
+                sub += "  ·  " + _t("pace.low")
             else:
-                sub += "  ·  on pace"
+                sub += "  ·  " + _t("pace.on")
         self._sub = sub
         # animate arc/number from the previous value (or 0 on first show) to the new one
         if _ANIMATE and (prev is None or abs(prev - pct) > 0.05):
@@ -419,20 +420,20 @@ class ForecastRow(QWidget):
             self._set_sub("steady pace · no overflow risk", FG3)
         elif fc.get("alert"):  # relevant overflow (bucket already high): alarm
             self._set_sub(
-                f"at current pace overflows in {fmt_time(eta)} · before reset"
-                f" ({fmt_time(seconds_until_reset)})", RED)
+                _t("fc.overflow_before", eta=fmt_time(eta),
+                   reset=fmt_time(seconds_until_reset)), RED)
         elif fc.get("overflow_before_reset"):
             # overflows before the reset only on paper, but usage is still low: the
             # short-term burn rate rarely holds up for that long — no alarm
             self._set_sub(
-                f"at recent pace would overflow in {fmt_time(eta)} · usage still low",
+                _t("fc.overflow_low", eta=fmt_time(eta)),
                 FG2)
         elif fc.get("overflow_before_reset") is False:
             self._set_sub(
-                f"overflows in {fmt_time(eta)} · reset arrives first"
-                f" ({fmt_time(seconds_until_reset)})", GREEN)
+                _t("fc.reset_first", eta=fmt_time(eta),
+                   reset=fmt_time(seconds_until_reset)), GREEN)
         else:
-            self._set_sub(f"at current pace overflows in {fmt_time(eta)}", FG2)
+            self._set_sub(_t("fc.overflow_plain", eta=fmt_time(eta)), FG2)
 
 
 class BarRow(QWidget):
@@ -474,7 +475,7 @@ class HeatmapWidget(QWidget):
     def set_data(self, pairs):
         mx = max((v for _, v in pairs), default=1) or 1
         self._cells = [(d, (v / mx)) for d, v in pairs]
-        self.setToolTip("rightmost = most recent · shade = usage")
+        self.setToolTip(_t("pj.heatmap_tip"))
         self.update()
 
     def paintEvent(self, event):
@@ -606,7 +607,7 @@ class DashboardWidget(QWidget):
         self._last_u = None
 
         self.setObjectName("dashRoot")
-        self.setWindowTitle("Claude Monitor")
+        self.setWindowTitle(_t("app.title"))
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setFixedWidth(440)
@@ -665,7 +666,7 @@ class DashboardWidget(QWidget):
         return b
 
     def _fc_header_text(self):
-        return ("▾  " if self._fc_open else "▸  ") + "FORECAST"
+        return ("▾  " if self._fc_open else "▸  ") + _t("sec.forecast")
 
     def _fit(self):
         # The card→window cascade must be triggered by hand: with the disclosure
@@ -730,7 +731,7 @@ class DashboardWidget(QWidget):
             self._fade_widget(self.fc_container)
 
     def _set_header_text(self):
-        return ("▾  " if self._set_open else "▸  ") + "SETTINGS"
+        return ("▾  " if self._set_open else "▸  ") + _t("sec.settings")
 
     def _toggle_settings(self):
         self._set_open = not self._set_open
@@ -748,7 +749,7 @@ class DashboardWidget(QWidget):
         return l
 
     def _pj_header_text(self):
-        return ("▾  " if self._pj_open else "▸  ") + "BY PROJECT"
+        return ("▾  " if self._pj_open else "▸  ") + _t("sec.projects")
 
     def _toggle_projects(self):
         self._pj_open = not self._pj_open
@@ -806,11 +807,12 @@ class DashboardWidget(QWidget):
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        body = QWidget()
-        body.setObjectName("dashBody")
-        self.scroll.setWidget(body)
+        self.scroll.setWidget(self._build_body())
         outer.addWidget(self.scroll)
 
+    def _build_body(self):
+        body = QWidget()
+        body.setObjectName("dashBody")
         main = QVBoxLayout(body)
         main.setContentsMargins(16, 16, 16, 16)
         main.setSpacing(13)
@@ -842,13 +844,13 @@ class DashboardWidget(QWidget):
 
         # ---- Usage (highlight) — ring gauges ----
         ucard, ubox = self._card()
-        ubox.addWidget(self._card_title("Usage"))
+        ubox.addWidget(self._card_title(_t("card.usage")))
         ubox.addSpacing(16)
         self.rings_box = QHBoxLayout()
         self.rings_box.setContentsMargins(0, 0, 0, 0)
         self.rings_box.setSpacing(6)
-        self.ring_5h = UsageRing("5h session")
-        self.ring_7d = UsageRing("Week")
+        self.ring_5h = UsageRing(_t("usage.session"))
+        self.ring_7d = UsageRing(_t("usage.week"))
         self.rings_box.addWidget(self.ring_5h)
         self.rings_box.addWidget(self.ring_7d)
         ubox.addLayout(self.rings_box)
@@ -868,8 +870,8 @@ class DashboardWidget(QWidget):
         self.fc_box = QVBoxLayout(self.fc_container)
         self.fc_box.setContentsMargins(0, 15, 0, 2)
         self.fc_box.setSpacing(14)
-        self.fc_5h = ForecastRow("Session (5h)")
-        self.fc_7d = ForecastRow("Week")
+        self.fc_5h = ForecastRow(_t("fc.session"))
+        self.fc_7d = ForecastRow(_t("fc.week"))
         self.fc_box.addWidget(self.fc_5h)
         self.fc_box.addWidget(self.fc_7d)
         fcbox.addWidget(self.fc_container)
@@ -886,24 +888,24 @@ class DashboardWidget(QWidget):
         pj_box = QVBoxLayout(self.pj_container)
         pj_box.setContentsMargins(0, 14, 0, 2)
         pj_box.setSpacing(7)
-        cap = QLabel("Output tokens · last 7 days · local count")
+        cap = QLabel(_t("pj.hint"))
         cap.setStyleSheet(f"color: {FG3}; font-size: 10px;")
         pj_box.addWidget(cap)
         pj_box.addSpacing(4)
-        pj_box.addWidget(self._mini_label("Projects"))
+        pj_box.addWidget(self._mini_label(_t("pj.projects")))
         self.pj_proj_rows = [BarRow() for _ in range(8)]
         for r in self.pj_proj_rows:
             pj_box.addWidget(r)
         pj_box.addSpacing(10)
-        pj_box.addWidget(self._mini_label("Models"))
+        pj_box.addWidget(self._mini_label(_t("pj.models")))
         self.pj_model_rows = [BarRow() for _ in range(5)]
         for r in self.pj_model_rows:
             pj_box.addWidget(r)
         pj_box.addSpacing(11)
-        pj_box.addWidget(self._mini_label("Last 14 days"))
+        pj_box.addWidget(self._mini_label(_t("pj.last14")))
         self.pj_heatmap = HeatmapWidget()
         pj_box.addWidget(self.pj_heatmap)
-        self.pj_empty = QLabel("collecting local data…")
+        self.pj_empty = QLabel(_t("pj.collecting"))
         self.pj_empty.setStyleSheet(f"color: {FG3}; font-size: 11px;")
         pj_box.addWidget(self.pj_empty)
         pjcardbox.addWidget(self.pj_container)
@@ -928,11 +930,32 @@ class DashboardWidget(QWidget):
         scardbox.addWidget(self.set_container)
         self.set_container.setVisible(self._set_open)
 
-        sbox.addWidget(self._card_title("Dongle"))
+        sbox.addWidget(self._card_title(_t("card.language")))
+        sbox.addSpacing(9)
+        lang_row = QHBoxLayout()
+        lang_row.setContentsMargins(0, 0, 0, 0)
+        lang_row.setSpacing(6)
+        self.lang_group = QButtonGroup(self)
+        self.lang_group.setExclusive(True)
+        current_lang = i18n.language()
+        for label, code in i18n.LANGUAGES:
+            b = QPushButton(label)
+            b.setProperty("kind", "seg")
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setChecked(code == current_lang)
+            b.clicked.connect(lambda _c=False, code=code: self._on_language(code))
+            self.lang_group.addButton(b)
+            lang_row.addWidget(b)
+        lang_row.addStretch()
+        sbox.addLayout(lang_row)
+
+        sbox.addSpacing(20)
+        sbox.addWidget(self._card_title(_t("card.dongle")))
         sbox.addSpacing(13)
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
-        op_lbl = QLabel("Opacity")
+        op_lbl = QLabel(_t("set.opacity"))
         op_lbl.setStyleSheet("font-size: 12px;")
         row.addWidget(op_lbl)
         row.addSpacing(12)
@@ -950,19 +973,19 @@ class DashboardWidget(QWidget):
         sbox.addLayout(row)
 
         sbox.addSpacing(20)
-        sbox.addWidget(self._card_title("Visibility"))
+        sbox.addWidget(self._card_title(_t("card.visibility")))
         sbox.addSpacing(6)
         self.show_group = QButtonGroup(self)
         current = self.cfg.get("show_mode", "always")
         for i, (text, val) in enumerate(SHOW_MODES):
-            rb = QRadioButton(text)
+            rb = QRadioButton(_t(text))
             rb.setChecked(current == val)
             self.show_group.addButton(rb, i)
             sbox.addWidget(rb)
         self.show_group.idToggled.connect(self._on_mode)
 
         sbox.addSpacing(20)
-        sbox.addWidget(self._card_title("Notifications"))
+        sbox.addWidget(self._card_title(_t("card.notifications")))
         self._build_notifications(sbox)
         main.addWidget(scard)
 
@@ -970,16 +993,17 @@ class DashboardWidget(QWidget):
         main.addSpacing(2)
         btns = QHBoxLayout()
         btns.setContentsMargins(4, 0, 4, 0)
-        quit_btn = QPushButton("Quit monitor")
+        quit_btn = QPushButton(_t("btn.quit"))
         quit_btn.setProperty("kind", "danger")
         quit_btn.clicked.connect(QApplication.quit)
         btns.addWidget(quit_btn)
         btns.addStretch()
-        close_btn = QPushButton("Close")
+        close_btn = QPushButton(_t("btn.close"))
         close_btn.setProperty("kind", "primary")
         close_btn.clicked.connect(self.close)
         btns.addWidget(close_btn)
         main.addLayout(btns)
+        return body
 
     # ---- usage refresh ----------------------------------------------------
 
@@ -994,9 +1018,9 @@ class DashboardWidget(QWidget):
         if u.get("identity_stale"):
             # stale oauthAccount (account switched and Claude Code hasn't
             # rewritten the name yet): don't show the old name as current
-            self.acc_name.setText("Account switched")
+            self.acc_name.setText(_t("acc.switched"))
             self.avatar.set_letter("?")
-            self.acc_email.setText("reopen Claude Code to sync the name")
+            self.acc_email.setText(_t("acc.reopen"))
         else:
             acc = u.get("account") or "—"
             self.acc_name.setText(acc)
@@ -1099,7 +1123,7 @@ class DashboardWidget(QWidget):
             seen_fc.add(model)
             row = self._fc_scoped.get(model)
             if row is None:
-                row = ForecastRow(f"Week · {model}")
+                row = ForecastRow(_t("fc.week_model", model=model))
                 self._fc_scoped[model] = row
                 self.fc_box.addWidget(row)
             metric = f"7d:{w.get('model') or 'scoped'}"
@@ -1111,16 +1135,17 @@ class DashboardWidget(QWidget):
                 self._fc_scoped.pop(model).deleteLater()
 
     def _meta_text(self, u):
-        parts = [SOURCE_LABELS.get(u.get("source"), u.get("source") or "?")]
+        parts = [_source_label(u.get("source"))]
         if u.get("stale"):
             age = u.get("stale_age_seconds")
-            parts.append(f"stale data · {fmt_time(age)} ago" if age is not None
-                         else "stale data")
+            parts.append(_t("meta.stale_age", age=fmt_time(age)) if age is not None
+                         else _t("meta.stale"))
         act = u.get("active_sessions") or 0
         if act:
-            parts.append("1 active session" if act == 1 else f"{act} active sessions")
+            parts.append(_t("meta.session_one") if act == 1
+                         else _t("meta.sessions", n=act))
         if u.get("overage_status") == "enabled":
-            parts.append("extra usage on")
+            parts.append(_t("meta.extra_on"))
         return "  ·  ".join(parts)
 
     # ---- settings ---------------------------------------------------------
@@ -1143,13 +1168,13 @@ class DashboardWidget(QWidget):
     # ---- notifications ----------------------------------------------------
 
     NOTIF_SWITCHES = [
-        ("Threshold crossed", "notify_on_threshold", True),
-        ("Limit reached (100%)", "notify_on_limit", True),
-        ("Overflow forecast", "forecast_notify", True),
-        ("Data source lost", "notify_on_telemetry", True),
+        ("notif.threshold_crossed", "notify_on_threshold", True),
+        ("notif.limit_reached", "notify_on_limit", True),
+        ("notif.overflow_forecast", "forecast_notify", True),
+        ("notif.telemetry_lost", "notify_on_telemetry", True),
     ]
-    COOLDOWNS = [("Off", 0), ("5m", 5), ("15m", 15), ("30m", 30), ("1h", 60)]
-    SNOOZES = [("30m", 30), ("2h", 120), ("Until reset", -1)]
+    COOLDOWNS = [("notif.off", 0), ("5m", 5), ("15m", 15), ("30m", 30), ("1h", 60)]
+    SNOOZES = [("30m", 30), ("2h", 120), ("notif.until_reset", -1)]
 
     def _hint(self, text):
         l = QLabel(text)
@@ -1159,7 +1184,7 @@ class DashboardWidget(QWidget):
 
     def _build_notifications(self, sbox):
         sbox.addSpacing(12)
-        sbox.addWidget(self._hint("Alert me when a limit crosses"))
+        sbox.addWidget(self._hint(_t("notif.thresholds_hint")))
         sbox.addSpacing(7)
         self.thr_row = QHBoxLayout()
         self.thr_row.setContentsMargins(0, 0, 0, 0)
@@ -1174,7 +1199,7 @@ class DashboardWidget(QWidget):
                 sbox.addSpacing(2)
             row = QHBoxLayout()
             row.setContentsMargins(0, 0, 0, 0)
-            lbl = QLabel(label)
+            lbl = QLabel(_t(label))
             lbl.setStyleSheet("font-size: 12px;")
             row.addWidget(lbl)
             row.addStretch()
@@ -1185,8 +1210,7 @@ class DashboardWidget(QWidget):
             sbox.addLayout(row)
 
         sbox.addSpacing(16)
-        sbox.addWidget(self._hint("Minimum gap between routine alerts — "
-                                  "a limit reached always goes through"))
+        sbox.addWidget(self._hint(_t("notif.gap_hint")))
         sbox.addSpacing(7)
         cool = QHBoxLayout()
         cool.setContentsMargins(0, 0, 0, 0)
@@ -1195,7 +1219,7 @@ class DashboardWidget(QWidget):
         self.cool_group.setExclusive(True)
         current = int(self.cfg.get("notify_cooldown_minutes", 15))
         for label, minutes in self.COOLDOWNS:
-            b = QPushButton(label)
+            b = QPushButton(_t(label) if "." in label else label)
             b.setProperty("kind", "seg")
             b.setCheckable(True)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1213,6 +1237,24 @@ class DashboardWidget(QWidget):
         sbox.addLayout(self.snooze_row)
         self.snooze_lbl = None
         self._render_snooze()
+
+    def _on_language(self, code):
+        if code == i18n.language() and self.cfg.get("language") == code:
+            return
+        self.cfg["language"] = code
+        config.save(self.cfg)
+        i18n.set_language(code)
+        # Rebuild rather than retranslate widget by widget: every label,
+        # header, tooltip and radio changes, and building the body is cheap
+        # (the scroll area deletes the old one for us).
+        self._scoped_rings.clear()
+        self._fc_scoped.clear()
+        self.scroll.setWidget(self._build_body())
+        self._refresh()
+        self._fit_to_screen()
+        self.setWindowTitle(_t("app.title"))
+        if self.dongle is not None:
+            self.dongle._update_tooltip()
 
     def _on_notify_switch(self, key, value):
         self.cfg[key] = bool(value)
@@ -1252,18 +1294,18 @@ class DashboardWidget(QWidget):
             self._tick_snooze(until)
             self.snooze_row.addWidget(self.snooze_lbl)
             self.snooze_row.addStretch()
-            b = QPushButton("Resume")
+            b = QPushButton(_t("notif.resume"))
             b.setProperty("kind", "ghost")
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(self._on_resume)
             self.snooze_row.addWidget(b)
             return
         self.snooze_lbl = None
-        lbl = QLabel("Snooze all")
+        lbl = QLabel(_t("notif.snooze_all"))
         lbl.setStyleSheet(f"color: {FG2}; font-size: 11px;")
         self.snooze_row.addWidget(lbl)
         for label, minutes in self.SNOOZES:
-            b = QPushButton(label)
+            b = QPushButton(_t(label) if "." in label else label)
             b.setProperty("kind", "seg")
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(lambda _c=False, m=minutes: self._on_snooze(m))
@@ -1282,7 +1324,7 @@ class DashboardWidget(QWidget):
         if not until:
             self._render_snooze()
             return
-        lbl.setText(f"Muted · {fmt_time(int(until - time.time()))} left")
+        lbl.setText(_t("notif.muted", time=fmt_time(int(until - time.time()))))
 
     def _render_thresholds(self):
         while self.thr_row.count():
