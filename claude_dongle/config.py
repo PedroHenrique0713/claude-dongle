@@ -43,6 +43,8 @@ DEFAULTS = {
     "forecast_expanded": False,    # Forecast section starts collapsed
     "projects_expanded": False,    # "By project" section starts collapsed
     "settings_expanded": False,    # Settings section starts collapsed
+    "hours_expanded": False,       # "By hour" section starts collapsed
+    "hours_days": 14,              # history window for the hourly profile
 }
 
 

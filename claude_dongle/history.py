@@ -7,6 +7,7 @@ the first INSERT lands. WAL + busy_timeout cover the multi-process case
 (the service dies when idle and is reborn with every terminal).
 """
 import sqlite3, time, threading
+from datetime import datetime
 
 from . import config
 
@@ -221,3 +222,50 @@ def _gc_once(cfg: dict) -> None:
         c.commit()
     except sqlite3.Error:
         pass
+
+
+def hourly_profile(days=14, metric="5h", account=None, now=None):
+    """How much you burn by hour of the local day.
+
+    Walks consecutive snapshots of the SAME window and credits each positive
+    delta to the hour of the later sample. Chaining across a window reset would
+    read the drop back to zero as negative burn, so a new window_epoch starts a
+    new chain. The result is percentage points per hour of the day, averaged
+    over the days actually observed — a machine that was off for a week doesn't
+    dilute the profile of the days it ran.
+
+    Returns {"hours": [24 floats], "days": n, "peak": hour or None}.
+    """
+    now = time.time() if now is None else now
+    cutoff = int(now - days * 86400)
+    hours = [0.0] * 24
+    seen_days = set()
+    try:
+        c = _conn()
+        # account=None means "every account on this machine" — used when
+        # inspecting; the panel always passes the account in use, since mixing
+        # two accounts' burn into one profile would describe nobody.
+        sql = ("SELECT window_epoch, ts, pct FROM snapshots"
+               " WHERE metric=? AND ts>=?")
+        args = [metric, cutoff]
+        if account is not None:
+            sql += " AND account=?"
+            args.append(account)
+        rows = c.execute(sql + " ORDER BY window_epoch ASC, ts ASC", args).fetchall()
+    except sqlite3.Error:
+        return {"hours": hours, "days": 0, "peak": None}
+
+    prev_epoch = prev_pct = None
+    for epoch, ts, pct in rows:
+        local = datetime.fromtimestamp(ts)
+        seen_days.add(local.date())
+        if epoch == prev_epoch and prev_pct is not None:
+            delta = pct - prev_pct
+            if delta > 0:
+                hours[local.hour] += delta
+        prev_epoch, prev_pct = epoch, pct
+
+    n_days = max(1, len(seen_days))
+    hours = [h / n_days for h in hours]
+    peak = max(range(24), key=lambda i: hours[i]) if any(hours) else None
+    return {"hours": hours, "days": len(seen_days), "peak": peak}
