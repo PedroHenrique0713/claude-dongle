@@ -87,6 +87,8 @@ login, nothing sent anywhere.
   <em>Limit and overflow-forecast alerts — they fire even with the dongle closed</em>
 </div>
 
+See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
+
 ## 📦 Installation
 
 Requirements: **Python 3.9+** and **Claude Code** installed and logged in on the
@@ -136,7 +138,9 @@ claude-dongle setup     # (optional) launch it automatically on login
 | `claude-dongle uninstall` | remove autostart |
 
 **Dongle interactions:** drag to reposition (it snaps to edges); click to open the
-dashboard; middle-click to refresh now.
+dashboard; middle-click to refresh now. The border breathes amber when the
+current pace overflows before the reset, and red when a limit that stops every
+model is spent — one model running out leaves it alone.
 
 ## 🔧 Configuration
 
@@ -144,14 +148,20 @@ Tune it from the panel or by editing `~/.config/claude-dongle/config.json`:
 
 | Key | Default | Description |
 |---|---|---|
+| `language` | `"auto"` | `auto` follows your system locale; pin it with `en` or `pt-BR` |
 | `thresholds` | `[50, 70, 85, 95]` | percentages that trigger a notification |
 | `show_mode` | `"dev"` | when to show the dongle: `always`, `claude`, `dev` or `custom` |
 | `poll_interval` | `5` | seconds between dongle refreshes |
 | `api_poll_interval` | `300` | minimum interval between API calls (the endpoint rate-limits aggressive polling) |
 | `dongle_opacity` | `0.85` | dongle opacity (0 to 1) |
+| `battery_saver` | `true` | run every timer at half rate while on battery |
 | `notify_on_threshold` | `true` | notify when a threshold is crossed |
 | `notify_on_limit` | `true` | notify when 100% is reached |
+| `notify_on_reset` | `true` | notify when a spent limit comes back |
+| `notify_on_telemetry` | `true` | notify when the monitor loses its data source |
 | `forecast_notify` | `true` | notify on a predicted overflow before the reset |
+| `notify_cooldown_minutes` | `15` | minimum gap between routine alerts (a limit reached always goes through) |
+| `hours_days` | `14` | history window behind the "by hour" profile |
 | `reset_day` / `reset_time` / `reset_timezone` | `null` | manual weekly-reset fallback, used only if the API never answered (`null` timezone = system local) |
 
 ## 🔍 How it works
@@ -164,8 +174,9 @@ limit warnings. From there:
 - `monitor` assembles the state; with no real source (API down and no cache) it
   shows `--` instead of inventing a number.
 - `history` keeps a local time series (SQLite) for the burn rate and forecast.
-- `projects` aggregates tokens per project/model by reading the JSONL files in
-  `~/.claude/projects`.
+- `projects` aggregates tokens per model by reading the JSONL files in
+  `~/.claude/projects` — deliberately not per project: attributing by the
+  session's working directory is wrong often enough to mislead.
 - `dongle` and `dashboard` (PyQt6, hand-drawn) render everything; `notifier`
   raises the alerts.
 
