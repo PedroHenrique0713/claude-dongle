@@ -849,9 +849,9 @@ class DashboardWidget(QWidget):
         return l
 
     def _pj_header_text(self):
-        return ("▾  " if self._pj_open else "▸  ") + _t("sec.projects")
+        return ("▾  " if self._pj_open else "▸  ") + _t("sec.models")
 
-    def _toggle_projects(self):
+    def _toggle_models(self):
         self._pj_open = not self._pj_open
         self.pj_container.setVisible(self._pj_open)
         self.pj_header.setText(self._pj_header_text())
@@ -859,7 +859,7 @@ class DashboardWidget(QWidget):
         config.save(self.cfg)
         if self._pj_open:
             self._kick_projects()
-            self._render_projects()
+            self._render_models()
         self._fit()
         if self._pj_open and _ANIMATE:
             self._fade_widget(self.pj_container)
@@ -869,21 +869,10 @@ class DashboardWidget(QWidget):
         # projects.refresh serializes; later incrementals are ~5ms).
         threading.Thread(target=projects.refresh, daemon=True).start()
 
-    def _render_projects(self):
-        s = projects.summary(days=7)
-        projs, models = s["projects"], s["models"]
-        self.pj_empty.setVisible(not projs)
+    def _render_models(self):
+        models = projects.summary(days=7)["models"]
+        self.pj_empty.setVisible(not models)
         self.pj_heatmap.set_data(projects.daily(14))
-        maxp = max((p["output"] for p in projs), default=1) or 1
-        for i, row in enumerate(self.pj_proj_rows):
-            if i < len(projs):
-                p = projs[i]
-                row.setVisible(True)
-                row.set_data(p["name"], 100 * p["output"] / maxp,
-                             _fmt_tokens(p["output"]),
-                             f"{p['output']:,} output tokens · {p['total']:,} total")
-            else:
-                row.setVisible(False)
         maxm = max((m["output"] for m in models), default=1) or 1
         for i, row in enumerate(self.pj_model_rows):
             if i < len(models):
@@ -985,10 +974,10 @@ class DashboardWidget(QWidget):
         self._fc_scoped = {}
         main.addWidget(fccard)
 
-        # ---- By project (disclosure) ----
+        # ---- By model (disclosure) ----
         self._pj_open = bool(self.cfg.get("projects_expanded", False))
         pjcard, pjcardbox = self._card(cm=(18, 14, 18, 14))
-        self.pj_header = self._disclosure_btn(self._pj_header_text(), self._toggle_projects)
+        self.pj_header = self._disclosure_btn(self._pj_header_text(), self._toggle_models)
         pjcardbox.addWidget(self.pj_header)
         self.pj_container = QWidget()
         pj_box = QVBoxLayout(self.pj_container)
@@ -997,14 +986,8 @@ class DashboardWidget(QWidget):
         cap = QLabel(_t("pj.hint"))
         cap.setStyleSheet(f"color: {FG3}; font-size: 10px;")
         pj_box.addWidget(cap)
-        pj_box.addSpacing(4)
-        pj_box.addWidget(self._mini_label(_t("pj.projects")))
-        self.pj_proj_rows = [BarRow() for _ in range(8)]
-        for r in self.pj_proj_rows:
-            pj_box.addWidget(r)
-        pj_box.addSpacing(10)
-        pj_box.addWidget(self._mini_label(_t("pj.models")))
-        self.pj_model_rows = [BarRow() for _ in range(5)]
+        pj_box.addSpacing(6)
+        self.pj_model_rows = [BarRow() for _ in range(6)]
         for r in self.pj_model_rows:
             pj_box.addWidget(r)
         pj_box.addSpacing(11)
@@ -1019,7 +1002,7 @@ class DashboardWidget(QWidget):
         main.addWidget(pjcard)
         if self._pj_open:
             self._kick_projects()
-            self._render_projects()
+            self._render_models()
 
         # ---- By hour (disclosure) ----
         self._hr_open = bool(self.cfg.get("hours_expanded", False))
@@ -1175,7 +1158,7 @@ class DashboardWidget(QWidget):
         self._render_availability(u)
         if self._pj_open:
             self._kick_projects()  # cheap incremental; lock prevents concurrency
-            self._render_projects()
+            self._render_models()
         if self._hr_open:
             self._render_hours()
 
