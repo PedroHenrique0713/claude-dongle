@@ -49,10 +49,11 @@ def test_limit_notification_at_100(tmp_path, monkeypatch):
 def test_new_window_resets_dedup(tmp_path, monkeypatch):
     calls = _capture(monkeypatch)
     sent = str(tmp_path / "sent.json")
-    notifier.check_thresholds(_usage(pct=60.0, w_epoch=1000), _state(), sent)
+    st = _state(notify_cooldown_minutes=0)
+    notifier.check_thresholds(_usage(pct=60.0, w_epoch=1000), st, sent)
     assert len(calls) == 1
     # New weekly window (fresh reset epoch) → old keys dropped, fires again
-    notifier.check_thresholds(_usage(pct=60.0, w_epoch=9999), _state(), sent)
+    notifier.check_thresholds(_usage(pct=60.0, w_epoch=9999), st, sent)
     assert len(calls) == 2
 
 
@@ -74,3 +75,71 @@ def test_none_pct_is_noop(tmp_path, monkeypatch):
     sent = str(tmp_path / "sent.json")
     assert notifier.check_thresholds(_usage(pct=None), _state(), sent) is False
     assert calls == []
+
+
+def test_one_notification_per_reading_even_with_several_buckets(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(notifier, "send",
+                        lambda t, m, urgency="normal": calls.append((t, m)))
+    sent = str(tmp_path / "sent.json")
+    # session and week cross a threshold in the same reading
+    notifier.check_thresholds(_usage(pct=72.0, pct_5h=88.0), _state(), sent)
+    assert len(calls) == 1
+    assert "5h session" in calls[0][1] and "Overall week" in calls[0][1]
+
+
+def test_cooldown_paces_routine_alerts_but_not_critical(tmp_path, monkeypatch):
+    calls = _capture(monkeypatch)
+    sent = str(tmp_path / "sent.json")
+    st = _state(notify_cooldown_minutes=60)
+    notifier.check_thresholds(_usage(pct=55.0), st, sent)
+    assert len(calls) == 1
+    # another routine threshold right after → held back by the cooldown
+    notifier.check_thresholds(_usage(pct=72.0), st, sent)
+    assert len(calls) == 1
+    # hitting the limit is critical → goes out despite the cooldown
+    notifier.check_thresholds(_usage(pct=100.0), st, sent)
+    assert any("100%" in c for c in calls)
+
+
+def test_repeated_100_percent_notifies_once_per_window(tmp_path, monkeypatch):
+    """The Fable case: staying at 100% must not re-alert on every poll."""
+    calls = _capture(monkeypatch)
+    sent = str(tmp_path / "sent.json")
+    for _ in range(20):
+        notifier.check_thresholds(_usage(pct=100.0), _state(), sent)
+    assert len([c for c in calls if "100%" in c]) == 1
+
+
+def test_mute_silences_and_expires(tmp_path, monkeypatch):
+    calls = _capture(monkeypatch)
+    sent = str(tmp_path / "sent.json")
+    notifier.mute(sent, 30)
+    assert notifier.muted_until(sent) > 0
+    notifier.check_thresholds(_usage(pct=100.0), _state(), sent)
+    assert calls == []
+    notifier.mute(sent, 0)
+    assert notifier.muted_until(sent) == 0
+
+
+def test_legacy_list_state_is_read_and_upgraded(tmp_path, monkeypatch):
+    import json
+    calls = _capture(monkeypatch)
+    sent = tmp_path / "sent.json"
+    # pre-cooldown format: a bare list of keys already sent
+    sent.write_text(json.dumps(["w1000:all:50"]))
+    notifier.check_thresholds(_usage(pct=55.0), _state(), str(sent))
+    assert calls == []  # the 50 key was honoured, nothing new crossed
+    assert isinstance(json.loads(sent.read_text()), dict)
+
+
+def test_upgrade_does_not_realert_when_the_epoch_was_off_by_a_second(tmp_path, monkeypatch):
+    """Pre-rounding state used the truncated epoch (X-1); adopt it instead of
+    treating the window as new."""
+    import json
+    calls = _capture(monkeypatch)
+    sent = tmp_path / "sent.json"
+    sent.write_text(json.dumps(["w999:all:50", "w999:all:limit"]))
+    notifier.check_thresholds(_usage(pct=100.0, w_epoch=1000), _state(), str(sent))
+    assert calls == []
+    assert "w1000:all:limit" in json.loads(sent.read_text())["keys"]
