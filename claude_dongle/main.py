@@ -1,21 +1,29 @@
 #!/usr/bin/env python3
 import sys, json
 
-from . import config, monitor, notifier
+from . import config, i18n, monitor, notifier
 from .tray import run as tray_run
 
 SENT_PATH = str(config.CONFIG_DIR / "sent_thresholds.json")
 TELEMETRY_PATH = str(config.CONFIG_DIR / "telemetry_state.json")
 
 
-def cmd_status():
+def _state():
+    """Config with the language already applied — every command renders or
+    notifies, and both must speak the configured language."""
     state = config.load()
+    i18n.set_language(state.get("language"))
+    return state
+
+
+def cmd_status():
+    state = _state()
     u = monitor.calc_usage(state)
     print(json.dumps(u, indent=2, ensure_ascii=False))
 
 
 def cmd_notify():
-    state = config.load()
+    state = _state()
     u = monitor.calc_usage(state)
     notifier.check_telemetry(u, state, TELEMETRY_PATH)
     if notifier.check_thresholds(u, state, SENT_PATH):
@@ -25,12 +33,12 @@ def cmd_notify():
 
 
 def cmd_tray():
-    state = config.load()
+    state = _state()
     tray_run(state)
 
 
 def cmd_config():
-    state = config.load()
+    state = _state()
     from .tray import get_app, Dashboard
     app = get_app()
     d = Dashboard(state)

@@ -6,6 +6,7 @@ from PyQt6.QtGui import (QPainter, QColor, QBrush, QPen, QFont, QFontMetrics,
                          QPainterPath, QRegion)
 
 from . import monitor, config, notifier, usage_api
+from .i18n import t as _t
 from .utils import (color as _color, fmt_time as _fmt_time, limits_blocking,
                    FG, FG2, FG3, ORANGE, RED, UI_FONT)
 
@@ -278,7 +279,8 @@ class DongleWidget(QWidget):
                                   f"Now on the {u['plan']} plan · reopen Claude "
                                   "Code to sync the name")
                 else:
-                    notifier.send(f"Account: {u['account']}", f"Plan: {u['plan']}")
+                    notifier.send(_t("n.account_title", account=u["account"]),
+                                  _t("n.account_body", plan=u["plan"]))
 
             self._s_pct = u.get("pct_5h")
             # Overall weekly and per-model weekly (e.g. Fable) are separate
@@ -332,17 +334,21 @@ class DongleWidget(QWidget):
         return fallback
 
     def _update_tooltip(self):
-        src = {"api": "official API", "none": "no data"}.get(self._source, self._source)
-        lines = [f"Source: {src}" + (" · stale data" if self._stale else "")]
+        src = {"api": _t("src.api"), "none": _t("src.none")}.get(self._source,
+                                                                 self._source)
+        lines = [_t("tip.source", src=src) + (_t("tip.stale") if self._stale else "")]
         if self._s_pct is not None:
-            lines.append(f"5h session: {self._s_pct:.0f}% · resets in {_fmt_time(self._reset_5h)}")
+            lines.append(_t("tip.session", pct=f"{self._s_pct:.0f}",
+                            time=_fmt_time(self._reset_5h)))
         if self._w_all is not None:
-            lines.append(f"Overall week: {self._w_all:.0f}% · resets in {_fmt_time(self._reset_w)}")
+            lines.append(_t("tip.week", pct=f"{self._w_all:.0f}",
+                            time=_fmt_time(self._reset_w)))
         if self._scoped_pct is not None:
-            lines.append(f"{self._scoped_name} week: {self._scoped_pct:.0f}%")
+            lines.append(_t("tip.week_model", model=self._scoped_name,
+                            pct=f"{self._scoped_pct:.0f}"))
         if self._overflow:
-            lines.append("⚠ at current pace, overflows before reset")
-        lines.append("click: open dashboard · middle: refresh now")
+            lines.append(_t("tip.overflow"))
+        lines.append(_t("tip.actions"))
         self.setToolTip("\n".join(lines))
 
     def paintEvent(self, event):

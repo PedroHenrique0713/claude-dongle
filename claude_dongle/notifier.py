@@ -1,6 +1,7 @@
 import subprocess, json, os, time, sys, tempfile
 from pathlib import Path
 from contextlib import contextmanager
+from .i18n import t as _t
 from .utils import fmt_time as _fmt_time
 
 try:  # POSIX only; Windows falls back to best-effort (no cross-process lock)
@@ -127,7 +128,7 @@ def _weekly_series(usage: dict) -> list:
 
     breakdown = usage.get("weekly_breakdown") or []
     if not breakdown:
-        return [{"label": "Overall week", "tag": "all", "pct": usage["pct"],
+        return [{"label": _t("n.week_all"), "tag": "all", "pct": usage["pct"],
                  "secs": fallback_reset, "fc_key": "7d"}]
     out = []
     for w in breakdown:
@@ -135,12 +136,13 @@ def _weekly_series(usage: dict) -> list:
         if p is None:
             continue
         if w.get("kind") == "weekly_all":
-            out.append({"label": "Overall week", "tag": "all", "pct": p,
+            out.append({"label": _t("n.week_all"), "tag": "all", "pct": p,
                         "secs": secs(w.get("reset")), "fc_key": "7d"})
         elif w.get("kind") == "weekly_scoped":
             model = w.get("model") or "model"
-            out.append({"label": f"Week {model}", "tag": model, "pct": p,
-                        "secs": secs(w.get("reset")), "fc_key": f"7d:{model}"})
+            out.append({"label": _t("n.week_model", model=model), "tag": model,
+                        "pct": p, "secs": secs(w.get("reset")),
+                        "fc_key": f"7d:{model}"})
     return out
 
 
@@ -179,9 +181,8 @@ def check_telemetry(usage: dict, state: dict, flag_path: str) -> bool:
 
     triggered = False
     if lost_for >= limit_s and not st.get("notified"):
-        send("No usage telemetry",
-             f"No fresh data for {_fmt_time(int(lost_for))} — the token may have "
-             f"expired or the API is unavailable.", "normal")
+        send(_t("n.telemetry_title"),
+             _t("n.telemetry_body", time=_fmt_time(int(lost_for))), "normal")
         st["notified"] = True
         triggered = True
     fp.parent.mkdir(parents=True, exist_ok=True)
@@ -210,7 +211,7 @@ def _events(usage: dict, state: dict, sent: set) -> list:
     buckets = []
     if pct_5h is not None:
         buckets.append({
-            "label": "5h session", "pct": pct_5h,
+            "label": _t("n.session"), "pct": pct_5h,
             "secs": usage.get("seconds_until_reset_5h"),
             "prefix": f"s{s_epoch}:", "fc": fc.get("5h") or {}, "fc_floor": 50,
         })
@@ -224,7 +225,7 @@ def _events(usage: dict, state: dict, sent: set) -> list:
     events = []
     for b in buckets:
         label, bpct, secs, pref = b["label"], b["pct"], b["secs"], b["prefix"]
-        reset = f"Resets in {_fmt_time(secs)}"
+        reset = _t("n.resets_in", time=_fmt_time(secs))
 
         # Crossing several thresholds at once (first read of a window, or
         # coming back from a period offline) fires ONE notification — the
@@ -237,16 +238,18 @@ def _events(usage: dict, state: dict, sent: set) -> list:
                 keys = [f"{pref}{t}" for t in crossed]
                 if bpct < 100:  # at 100%+ the limit event below covers it
                     top = max(crossed)
-                    events.append({"title": f"{label} · {bpct:.0f}%", "body": reset,
-                                   "urgency": "critical" if top >= 95 else "normal",
-                                   "keys": keys})
+                    events.append({
+                        "title": _t("n.pct_title", label=label, pct=f"{bpct:.0f}"),
+                        "body": reset,
+                        "urgency": "critical" if top >= 95 else "normal",
+                        "keys": keys})
                 else:
                     events.append({"title": None, "body": None, "keys": keys})
 
         key = f"{pref}limit"
         if limit_on and bpct >= 100 and key not in sent:
-            events.append({"title": f"{label} · 100%",
-                           "body": f"Limit reached · {reset.lower()}",
+            events.append({"title": _t("n.limit_title", label=label),
+                           "body": _t("n.limit_body", time=_fmt_time(secs)),
                            "urgency": "critical", "keys": [key]})
 
         # Forecast: at the current pace this bucket overflows before the reset.
@@ -257,10 +260,11 @@ def _events(usage: dict, state: dict, sent: set) -> list:
         if (forecast_on and f.get("overflow_before_reset")
                 and b["fc_floor"] <= bpct < 100 and key not in sent):
             events.append({
-                "title": f"{label} · overflow forecast",
-                "body": (f"{bpct:.0f}% now · +{f['rate_pph']:.1f} pp/h · "
-                         f"overflows in {_fmt_time(f['eta_seconds'])}, "
-                         f"before the reset in {_fmt_time(secs)}"),
+                "title": _t("n.forecast_title", label=label),
+                "body": _t("n.forecast_body", pct=f"{bpct:.0f}",
+                           rate=f"{f['rate_pph']:.1f}",
+                           eta=_fmt_time(f["eta_seconds"]),
+                           reset=_fmt_time(secs)),
                 "urgency": "critical", "keys": [key]})
     return events
 
@@ -321,7 +325,7 @@ def check_thresholds(usage: dict, state: dict, sent_path: str) -> bool:
             else:
                 urgency = ("critical" if any(e["urgency"] == "critical" for e in speak)
                            else "normal")
-                send("Usage limits",
+                send(_t("n.multi_title"),
                      "\n".join(f"{e['title']} · {e['body']}" for e in speak), urgency)
             st["last_sent"] = now
             triggered = True

@@ -49,6 +49,8 @@ login, nothing sent anywhere.
   Everything crossing in the same reading arrives as one notification, a
   minimum gap paces the routine ones, and you can snooze them all for a while.
   Works even with the dongle closed, via a background timer.
+- **English or Portuguese** — a switch in the settings changes the whole panel
+  and the notifications on the spot; by default it follows your system locale.
 - **Cross-platform** — Linux, macOS and Windows, with native autostart on each.
 
 ## 🖼️ Preview

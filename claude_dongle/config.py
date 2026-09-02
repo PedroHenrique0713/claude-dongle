@@ -16,6 +16,9 @@ DEFAULTS = {
     "reset_day": None,
     "reset_time": None,
     "reset_timezone": None,
+    # "auto" follows the system language (pt-BR when it speaks Portuguese),
+    # or pin it: "en" / "pt-BR".
+    "language": "auto",
     "poll_interval": 5,
     "thresholds": [50, 70, 85, 95],
     "notify_on_threshold": True,

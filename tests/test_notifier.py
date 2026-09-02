@@ -143,3 +143,24 @@ def test_upgrade_does_not_realert_when_the_epoch_was_off_by_a_second(tmp_path, m
     notifier.check_thresholds(_usage(pct=100.0, w_epoch=1000), _state(), str(sent))
     assert calls == []
     assert "w1000:all:limit" in json.loads(sent.read_text())["keys"]
+
+
+def test_notifications_follow_the_configured_language(tmp_path, monkeypatch):
+    from claude_dongle import i18n
+    calls = []
+    monkeypatch.setattr(notifier, "send",
+                        lambda t, m, urgency="normal": calls.append((t, m)))
+    sent = str(tmp_path / "sent.json")
+    try:
+        i18n.set_language("pt-BR")
+        notifier.check_thresholds(_usage(pct=100.0), _state(), sent)
+        title, body = calls[0]
+        assert "Semana geral · 100%" == title
+        assert body.startswith("Limite estourado · reseta em")
+    finally:
+        i18n.set_language("en")
+    # back in English the same reading reads in English
+    calls.clear()
+    notifier.check_thresholds(_usage(pct=100.0, w_epoch=2000),
+                              _state(), str(tmp_path / "sent2.json"))
+    assert calls[0][0] == "Overall week · 100%"
