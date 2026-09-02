@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 
@@ -129,3 +130,37 @@ def availability_text(usage):
         return None
     t_left = left(blocked[0].get("reset")) or fmt_time(usage.get("seconds_until_reset"))
     return _t("avail.spent_scope", model=", ".join(models), time=t_left)
+
+
+POWER_SUPPLY = "/sys/class/power_supply"
+
+
+def on_battery():
+    """True when the machine is running on battery, False on mains or unknown.
+
+    Reads the "Mains" supplies' `online` flag: it is the state of the CABLE,
+    which is what should slow the monitor down, while a battery's `status` says
+    Full/Charging/Discharging and reads Full on a desktop with a UPS. Unknown
+    means False on purpose — a machine we can't measure keeps the normal pace
+    instead of being throttled forever.
+    """
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        names = os.listdir(POWER_SUPPLY)
+    except OSError:
+        return False
+    seen_mains = False
+    for name in names:
+        base = os.path.join(POWER_SUPPLY, name)
+        try:
+            with open(os.path.join(base, "type")) as f:
+                if f.read().strip() != "Mains":
+                    continue
+            seen_mains = True
+            with open(os.path.join(base, "online")) as f:
+                if f.read().strip() == "1":
+                    return False
+        except OSError:
+            continue
+    return seen_mains  # every mains supply reported offline

@@ -8,7 +8,7 @@ from PyQt6.QtGui import (QPainter, QColor, QBrush, QPen, QFont, QFontMetrics,
 from . import monitor, config, notifier, usage_api
 from .i18n import t as _t
 from .utils import (color as _color, fmt_time as _fmt_time, limits_blocking,
-                   availability_text,
+                   availability_text, on_battery,
                    FG, FG2, FG3, ORANGE, RED, UI_FONT)
 
 SENT_PATH = str(config.CONFIG_DIR / "sent_thresholds.json")
@@ -22,6 +22,7 @@ CLICK_SLOP = 8  # manhattan px: below this the release counts as a click
 HOT_RESET_S = 30 * 60  # session resetting sooner than this: countdown gets highlighted
 VIS_CHECK_MS = 5000  # visibility trigger (opening/closing a terminal reacts fast)
 BREATH_PERIOD_S = 5.5   # one full in/out of the warning border
+BATTERY_SLOWDOWN = 2    # every timer runs this much slower on battery
 BREATH_FRAME_MS = 80    # the timer ticks this often; a frame is only painted
                         # when the border actually changes (see _breath)
 _ANIMATE = os.environ.get("QT_QPA_PLATFORM") != "offscreen"  # no animation when headless
@@ -110,6 +111,7 @@ class DongleWidget(QWidget):
         self._critical = False    # a limit that blocks everything is exhausted
         self._availability = None # what is spent right now (tooltip)
         self._budget_s = None     # seconds of work left at the current pace
+        self._on_battery = False  # timers run slower while unplugged
         self._paint_stamp = None  # last countdown text painted (skips no-op repaints)
         self._breath_frame = None # last border frame painted (same idea)
         self._hidden = False
@@ -178,6 +180,27 @@ class DongleWidget(QWidget):
         self._anim_timer.timeout.connect(self._on_anim)
         self._anim_timer.start(1000)
         self.poll()
+
+    def _pace_multiplier(self):
+        return BATTERY_SLOWDOWN if self._on_battery else 1
+
+    def _apply_power_mode(self):
+        """On battery every timer runs at half rate.
+
+        The dongle is a passenger on a laptop: polling, scanning processes and
+        breathing at the same rate plugged or not spends the battery on a
+        number that changes every five minutes anyway. Unplugging is noticed
+        on the next poll — no extra timer to watch the cable.
+        """
+        wanted = on_battery() if self.cfg.get("battery_saver", True) else False
+        if wanted == self._on_battery:
+            return
+        self._on_battery = wanted
+        mult = self._pace_multiplier()
+        self._timer.setInterval(int(self.cfg["poll_interval"] * 1000 * mult))
+        self._vis_timer.setInterval(VIS_CHECK_MS * mult)
+        print("[dongle] %s power mode" % ("battery" if wanted else "mains"),
+              flush=True)
 
     def _breath(self):
         """(alpha, width) of the warning border right now.
@@ -321,9 +344,11 @@ class DongleWidget(QWidget):
             self._availability = u.get("availability")
             self._critical = (not self._stale) and limits_blocking(
                 self._s_pct, self._w_all)
+            self._apply_power_mode()
             # smooth frames while breathing; else 1s just for the countdown
             self._anim_timer.setInterval(
-                BREATH_FRAME_MS if (self._critical or self._overflow) else 1000)
+                (BREATH_FRAME_MS if (self._critical or self._overflow) else 1000)
+                * self._pace_multiplier())
             self._update_tooltip()
 
             self.update()

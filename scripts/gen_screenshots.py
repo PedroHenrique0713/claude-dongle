@@ -97,6 +97,12 @@ projects.summary = lambda days=7, limit=8: {
 projects.daily = lambda days=14: [
     (f"2026-06-{20 + i:02d}", HEAT[i] * 120_000) for i in range(14)]
 history.record = lambda *a, **k: None
+# A plausible working day — never the real profile: it would put the author's
+# actual working hours in a public README.
+FAKE_HOURS = [0.2, 0.1, 0, 0, 0, 0, 0, 0.3, 1.1, 2.4, 3.6, 4.1, 2.2, 3.9,
+              5.4, 4.8, 5.9, 6.8, 4.2, 2.6, 3.1, 2.0, 0.9, 0.4]
+history.hourly_profile = lambda *a, **k: {
+    "hours": FAKE_HOURS, "days": 14, "peak": 17}
 history.attach_forecasts = lambda *a, **k: None
 config.save = lambda *a, **k: None
 
@@ -142,6 +148,7 @@ def gen_app_shots():
     for name, over in (("dashboard", dict(forecast_expanded=False, projects_expanded=False,
                                           settings_expanded=False)),
                        ("dashboard-full", dict(forecast_expanded=True, projects_expanded=True,
+                                               hours_expanded=True,
                                                settings_expanded=True))):
         w = DashboardWidget(_cfg(**over))
         w.show(); app.processEvents()

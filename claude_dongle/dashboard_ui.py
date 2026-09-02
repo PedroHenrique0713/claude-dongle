@@ -4,7 +4,8 @@ if sys.platform.startswith("linux"):
 
 from . import monitor, config, history, projects, notifier, i18n
 from .i18n import t as _t
-from .utils import (color, fmt_time, availability_text, RED, ORANGE, GREEN, BG, BG2, BG3, FG, FG2, FG3, SEP,
+from .utils import (color, fmt_time, availability_text, on_battery,
+                   RED, ORANGE, GREEN, BG, BG2, BG3, FG, FG2, FG3, SEP,
                    ACCENT, ACCENT2, SURFACE, SURFACE_HI, UI_FONT, UI_FONT_STACK)
 
 
@@ -1100,6 +1101,19 @@ class DashboardWidget(QWidget):
         row.addWidget(self.op_label)
         sbox.addLayout(row)
 
+        sbox.addSpacing(12)
+        batt_row = QHBoxLayout()
+        batt_row.setContentsMargins(0, 0, 0, 0)
+        batt_lbl = QLabel(_t("set.battery_saver"))
+        batt_lbl.setStyleSheet("font-size: 12px;")
+        batt_row.addWidget(batt_lbl)
+        batt_row.addStretch()
+        self.batt_switch = ToggleSwitch(self.cfg.get("battery_saver", True))
+        self.batt_switch.onToggled(
+            lambda v: self._on_notify_switch("battery_saver", v))
+        batt_row.addWidget(self.batt_switch)
+        sbox.addLayout(batt_row)
+
         sbox.addSpacing(20)
         sbox.addWidget(self._card_title(_t("card.visibility")))
         sbox.addSpacing(6)
@@ -1285,6 +1299,8 @@ class DashboardWidget(QWidget):
                          else _t("meta.sessions", n=act))
         if u.get("overage_status") == "enabled":
             parts.append(_t("meta.extra_on"))
+        if self.cfg.get("battery_saver", True) and on_battery():
+            parts.append(_t("meta.on_battery"))
         return "  ·  ".join(parts)
 
     # ---- settings ---------------------------------------------------------

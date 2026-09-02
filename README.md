@@ -44,6 +44,13 @@ login, nothing sent anywhere.
   pace at a glance, no math.
 - **Per-project & per-model usage** — from Claude Code's local logs, it shows
   which projects and models ate your week (with a 14-day heatmap).
+- **What's still usable** — a model running out of its weekly quota doesn't
+  stop the others, so the panel says exactly that, and when it comes back.
+- **Budget, not just a threat** — the forecast answers "can I take one more
+  task?": *~2h30 of work left · the reset only comes in 1d 23h*.
+- **Your burn by hour of the day** — built from the history it already keeps,
+  it shows the hours you actually spend the window on.
+- **Easy on the battery** — every timer runs at half rate while unplugged.
 - **Limit notifications** — alerts when you cross a threshold, when a limit is
   reached and on the overflow forecast, each limit tracked as its own series.
   Everything crossing in the same reading arrives as one notification, a
