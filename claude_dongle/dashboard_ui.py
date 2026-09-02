@@ -422,28 +422,29 @@ class ForecastRow(QWidget):
         rate = (fc or {}).get("rate_pph")
         if rate is None:
             self.rate.setText("")
-            self._set_sub("collecting data…", FG3)
+            self._set_sub(_t("fc.collecting"), FG3)
             return
-        self.rate.setText(f"{rate:+.1f} pp/h")
+        self.rate.setText(_t("fc.rate", rate=rate))
         eta = fc.get("eta_seconds")
+        # Said as a budget ("how much work still fits") rather than as a
+        # threat ("it overflows in X"): same number, and it answers the
+        # question you actually have before starting one more task.
         if eta is None:
-            self._set_sub("steady pace · no overflow risk", FG3)
+            self._set_sub(_t("fc.steady"), FG3)
         elif fc.get("alert"):  # relevant overflow (bucket already high): alarm
             self._set_sub(
-                _t("fc.overflow_before", eta=fmt_time(eta),
+                _t("fc.budget_before", eta=fmt_time(eta),
                    reset=fmt_time(seconds_until_reset)), RED)
         elif fc.get("overflow_before_reset"):
             # overflows before the reset only on paper, but usage is still low: the
             # short-term burn rate rarely holds up for that long — no alarm
-            self._set_sub(
-                _t("fc.overflow_low", eta=fmt_time(eta)),
-                FG2)
+            self._set_sub(_t("fc.overflow_low", eta=fmt_time(eta)), FG2)
         elif fc.get("overflow_before_reset") is False:
             self._set_sub(
-                _t("fc.reset_first", eta=fmt_time(eta),
-                   reset=fmt_time(seconds_until_reset)), GREEN)
+                _t("fc.budget_reset_first", reset=fmt_time(seconds_until_reset)),
+                GREEN)
         else:
-            self._set_sub(_t("fc.overflow_plain", eta=fmt_time(eta)), FG2)
+            self._set_sub(_t("fc.budget_plain", eta=fmt_time(eta)), FG2)
 
 
 class BarRow(QWidget):
@@ -533,6 +534,62 @@ class AvatarWidget(QWidget):
         p.setPen(QPen(QColor("white")))
         p.setFont(QFont(UI_FONT, 16, QFont.Weight.Bold))
         p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._letter)
+        p.end()
+
+
+class HourProfileWidget(QWidget):
+    """24 columns: how much of a window you burn in each hour of the day.
+
+    Reads like a clock, not a chart — the point is recognising your own shape
+    (the 17h peak, the quiet morning), so the current hour is marked and the
+    labels are only 0/6/12/18.
+    """
+
+    H = 62
+    LABEL_H = 14
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(self.H + self.LABEL_H)
+        self.setMinimumWidth(200)
+        self._hours = [0.0] * 24
+        self._peak = None
+
+    def set_data(self, hours, peak):
+        self._hours = list(hours) + [0.0] * (24 - len(hours))
+        self._peak = peak
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        w = self.width()
+        gap = 3
+        bw = max(2.0, (w - gap * 23) / 24)
+        top = self.H
+        peak_v = max(self._hours) or 1.0
+        now_h = time.localtime().tm_hour
+        for i, v in enumerate(self._hours):
+            x = i * (bw + gap)
+            h = max(2.0, top * (v / peak_v)) if v > 0 else 2.0
+            if v <= 0:
+                col = QColor(BG3)
+            else:
+                col = QColor(ACCENT)
+                col.setAlpha(int(90 + 165 * (v / peak_v)))
+            if i == now_h:
+                col = QColor(GREEN if v > 0 else FG3)
+            p.setBrush(col)
+            p.drawRoundedRect(QRectF(x, top - h, bw, h), 2, 2)
+        f = QFont(UI_FONT, 7)
+        p.setFont(f)
+        p.setPen(QPen(QColor(FG3)))
+        for i in (0, 6, 12, 18):
+            x = i * (bw + gap)
+            p.drawText(QRectF(x, top + 2, bw * 3, self.LABEL_H),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                       f"{i}h")
         p.end()
 
 
@@ -682,7 +739,8 @@ class DashboardWidget(QWidget):
         # The card→window cascade must be triggered by hand: with the disclosure
         # inside a QFrame, hiding/showing the container doesn't recompute the
         # card's sizeHint on its own (without relying on the event loop).
-        for c in (self.fc_container, self.pj_container, self.set_container):
+        for c in (self.fc_container, self.pj_container, self.hr_container,
+                  self.set_container):
             pl = c.parentWidget().layout()
             if pl is not None:
                 pl.invalidate()
@@ -739,6 +797,37 @@ class DashboardWidget(QWidget):
         self._fit()  # window shrinks/expands with the content
         if self._fc_open and _ANIMATE:
             self._fade_widget(self.fc_container)
+
+    def _hr_header_text(self):
+        return ("▾  " if self._hr_open else "▸  ") + _t("sec.hours")
+
+    def _toggle_hours(self):
+        self._hr_open = not self._hr_open
+        self.hr_container.setVisible(self._hr_open)
+        self.hr_header.setText(self._hr_header_text())
+        self.cfg["hours_expanded"] = self._hr_open
+        config.save(self.cfg)
+        if self._hr_open:
+            self._render_hours()
+        self._fit()
+        if self._hr_open and _ANIMATE:
+            self._fade_widget(self.hr_container)
+
+    def _render_hours(self):
+        u = self._last_u or {}
+        try:
+            prof = history.hourly_profile(
+                days=int(self.cfg.get("hours_days", 14)),
+                account=u.get("account") or "")
+        except Exception:
+            return
+        self.hr_profile.set_data(prof["hours"], prof["peak"])
+        if not prof["days"] or prof["peak"] is None:
+            self.hr_hint.setText(_t("hours.empty"))
+            self.hr_peak.setText("")
+            return
+        self.hr_hint.setText(_t("hours.hint", days=prof["days"]))
+        self.hr_peak.setText(_t("hours.peak", hour=prof["peak"]))
 
     def _set_header_text(self):
         return ("▾  " if self._set_open else "▸  ") + _t("sec.settings")
@@ -931,6 +1020,29 @@ class DashboardWidget(QWidget):
             self._kick_projects()
             self._render_projects()
 
+        # ---- By hour (disclosure) ----
+        self._hr_open = bool(self.cfg.get("hours_expanded", False))
+        hrcard, hrbox = self._card(cm=(18, 14, 18, 14))
+        self.hr_header = self._disclosure_btn(self._hr_header_text(),
+                                              self._toggle_hours)
+        hrbox.addWidget(self.hr_header)
+        self.hr_container = QWidget()
+        hr_box = QVBoxLayout(self.hr_container)
+        hr_box.setContentsMargins(0, 14, 0, 2)
+        hr_box.setSpacing(8)
+        self.hr_hint = self._hint("")
+        hr_box.addWidget(self.hr_hint)
+        self.hr_profile = HourProfileWidget()
+        hr_box.addWidget(self.hr_profile)
+        self.hr_peak = QLabel("")
+        self.hr_peak.setStyleSheet(f"color: {FG2}; font-size: 11px; font-weight: 600;")
+        hr_box.addWidget(self.hr_peak)
+        hrbox.addWidget(self.hr_container)
+        self.hr_container.setVisible(self._hr_open)
+        main.addWidget(hrcard)
+        if self._hr_open:
+            self._render_hours()
+
         # ---- Settings (disclosure: dongle + visibility + notifications) ----
         # Collapsed by default: settings are read rarely and, expanded, they
         # alone are taller than the usage the panel exists to show.
@@ -1050,6 +1162,8 @@ class DashboardWidget(QWidget):
         if self._pj_open:
             self._kick_projects()  # cheap incremental; lock prevents concurrency
             self._render_projects()
+        if self._hr_open:
+            self._render_hours()
 
     def _tick(self):
         # live countdown (1s): recomputes only the times/pace of the usage rows,

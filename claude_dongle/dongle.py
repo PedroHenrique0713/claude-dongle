@@ -109,6 +109,7 @@ class DongleWidget(QWidget):
         self._overflow = False    # some bucket forecast to overflow before the reset
         self._critical = False    # a limit that blocks everything is exhausted
         self._availability = None # what is spent right now (tooltip)
+        self._budget_s = None     # seconds of work left at the current pace
         self._paint_stamp = None  # last countdown text painted (skips no-op repaints)
         self._breath_frame = None # last border frame painted (same idea)
         self._hidden = False
@@ -308,6 +309,11 @@ class DongleWidget(QWidget):
             # short-term burn rate extrapolated over days while usage is still low.
             self._overflow = (not self._stale) and any(
                 v.get("alert") for v in fcs.values())
+            # The budget is the TIGHTEST of the windows: the first ceiling you
+            # hit is the one that stops the work.
+            etas = [v["eta_seconds"] for v in fcs.values()
+                    if v.get("eta_seconds") is not None]
+            self._budget_s = min(etas) if etas and not self._stale else None
             # A scoped model running out (Fable at 100%) does NOT stop the
             # work — the other models keep going against the overall week. Red
             # is for the limits that stop EVERYTHING: the 5h session and the
@@ -354,6 +360,8 @@ class DongleWidget(QWidget):
                                    "seconds_until_reset_5h": self._reset_5h})
         if spent:
             lines.append(spent)
+        if self._budget_s is not None:
+            lines.append(_t("tip.budget", eta=_fmt_time(self._budget_s)))
         if self._overflow:
             lines.append(_t("tip.overflow"))
         lines.append(_t("tip.actions"))
