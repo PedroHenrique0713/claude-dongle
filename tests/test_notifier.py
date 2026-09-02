@@ -164,3 +164,47 @@ def test_notifications_follow_the_configured_language(tmp_path, monkeypatch):
     notifier.check_thresholds(_usage(pct=100.0, w_epoch=2000),
                               _state(), str(tmp_path / "sent2.json"))
     assert calls[0][0] == "Overall week · 100%"
+
+
+def _weekly(pct_all, scoped=None, reset=1000):
+    out = [{"kind": "weekly_all", "pct": pct_all, "reset": reset}]
+    for model, pct in (scoped or {}).items():
+        out.append({"kind": "weekly_scoped", "model": model, "pct": pct,
+                    "reset": reset})
+    return out
+
+
+def test_notifies_once_when_a_spent_limit_comes_back(tmp_path, monkeypatch):
+    calls = _capture(monkeypatch)
+    sent = str(tmp_path / "sent.json")
+    st = _state(notify_cooldown_minutes=0)
+    spent = _usage(pct=100.0, w_epoch=1000)
+    spent["weekly_breakdown"] = _weekly(40.0, {"Fable": 100.0}, reset=1000)
+    notifier.check_thresholds(spent, st, sent)
+    assert any("100%" in c for c in calls)
+    calls.clear()
+    # same window, still spent → nothing new
+    notifier.check_thresholds(spent, st, sent)
+    assert calls == []
+    # the week rolled over and Fable is under the limit again
+    back = _usage(pct=12.0, w_epoch=9999)
+    back["weekly_breakdown"] = _weekly(12.0, {"Fable": 5.0}, reset=9999)
+    notifier.check_thresholds(back, st, sent)
+    assert any("is back" in c for c in calls)
+    calls.clear()
+    notifier.check_thresholds(back, st, sent)
+    assert not any("is back" in c for c in calls)  # said once
+
+
+def test_limit_back_can_be_turned_off(tmp_path, monkeypatch):
+    calls = _capture(monkeypatch)
+    sent = str(tmp_path / "sent.json")
+    st = _state(notify_cooldown_minutes=0, notify_on_reset=False)
+    u = _usage(pct=100.0, w_epoch=1000)
+    u["weekly_breakdown"] = _weekly(100.0, reset=1000)
+    notifier.check_thresholds(u, st, sent)
+    calls.clear()
+    back = _usage(pct=10.0, w_epoch=9999)
+    back["weekly_breakdown"] = _weekly(10.0, reset=9999)
+    notifier.check_thresholds(back, st, sent)
+    assert not any("is back" in c for c in calls)

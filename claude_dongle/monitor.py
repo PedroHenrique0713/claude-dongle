@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from . import history
 from . import usage_api
+from .utils import availability
 
 CLAUDE_JSON = Path.home() / ".claude" / ".claude.json"
 _prev_identity = None
@@ -176,6 +177,10 @@ def calc_usage(state: dict) -> dict:
         result["pct_7d_scope"] = scope_7d
     if weekly_breakdown:
         result["weekly_breakdown"] = weekly_breakdown
+    # What is spent and what still runs — the panel, the tooltip and the
+    # "limit is back" notification all read this instead of re-deriving it.
+    if pct_7d is not None:
+        result["availability"] = availability(pct_5h, weekly_breakdown)
     if stale_age is not None:
         result["stale_age_seconds"] = stale_age
     if overage:
