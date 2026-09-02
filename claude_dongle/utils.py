@@ -58,3 +58,13 @@ def fmt_time(seconds):
             return f"{hours}h"
         return f"{hours}h{mins:02d}"
     return f"{mins}m"
+
+
+def limits_blocking(pct_5h, pct_week_all, threshold=100):
+    """True when a limit that stops EVERY model is exhausted.
+
+    A scoped weekly limit (Fable at 100%) is NOT one of them: the other models
+    keep running against the overall week, so painting the dongle red for it
+    cried wolf. Only the 5h session and the overall week stop the work.
+    """
+    return any(p is not None and p >= threshold for p in (pct_5h, pct_week_all))

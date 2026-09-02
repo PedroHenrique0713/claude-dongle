@@ -14,3 +14,17 @@ def test_fmt_time():
 def test_color_ramp():
     assert color(10) != color(60) != color(85) != color(99)
     assert color(95) == color(100)
+
+
+def test_limits_blocking_ignores_a_scoped_model():
+    from claude_dongle.utils import limits_blocking
+    # Fable exhausted while the session and the overall week still have room:
+    # the other models keep working → not blocking
+    assert limits_blocking(8.0, 72.0) is False
+    # the overall week gone → nothing runs
+    assert limits_blocking(8.0, 100.0) is True
+    # the 5h session gone → nothing runs either
+    assert limits_blocking(100.0, 30.0) is True
+    # 95% is high but still usable: red is reserved for a full stop
+    assert limits_blocking(96.0, 99.0) is False
+    assert limits_blocking(None, None) is False
