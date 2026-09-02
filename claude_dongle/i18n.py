@@ -6,6 +6,8 @@ degrades into English instead of showing raw keys on screen.
 """
 import locale
 import os
+import subprocess
+import sys
 
 DEFAULT = "en"
 # (label shown in the picker, code stored in the config)
@@ -246,13 +248,39 @@ def resolve(setting):
     system when we speak it, and falls back to English when we don't."""
     if setting and setting != "auto":
         return setting if setting in _STRINGS else DEFAULT
-    tag = os.environ.get("LC_ALL") or os.environ.get("LANG") or ""
-    if not tag:
+    tag = _system_language()
+    # Windows spells it "Portuguese_Brazil.1252"; macOS gives "pt-BR"
+    return "pt-BR" if tag.startswith(("pt", "portuguese")) else DEFAULT
+
+
+def _system_language():
+    """The system's language tag, lowercase, or "" — never with side effects.
+
+    The environment is only the first try: Windows has no LANG/LC_ALL, and a
+    macOS app launched from Finder or launchd usually doesn't either. Nothing
+    here calls setlocale(), which would change the locale of the whole process
+    just to read a preference.
+    """
+    for var in ("LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"):
+        tag = os.environ.get(var)
+        if tag and tag not in ("C", "POSIX", "C.UTF-8"):
+            return tag.replace("-", "_").lower()
+    if sys.platform == "win32":
         try:
-            tag = locale.getdefaultlocale()[0] or ""
-        except (ValueError, TypeError):
-            tag = ""
-    return "pt-BR" if tag.lower().startswith("pt") else DEFAULT
+            import ctypes
+            lcid = ctypes.windll.kernel32.GetUserDefaultUILanguage()
+            return (locale.windows_locale.get(lcid) or "").lower()
+        except Exception:
+            return ""
+    if sys.platform == "darwin":
+        try:
+            out = subprocess.check_output(
+                ["defaults", "read", "-g", "AppleLocale"],
+                text=True, timeout=3, stderr=subprocess.DEVNULL)
+            return out.strip().replace("-", "_").lower()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    return ""
 
 
 def set_language(setting):

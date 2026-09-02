@@ -23,6 +23,7 @@ HOT_RESET_S = 30 * 60  # session resetting sooner than this: countdown gets high
 VIS_CHECK_MS = 5000  # visibility trigger (opening/closing a terminal reacts fast)
 BREATH_PERIOD_S = 5.5   # one full in/out of the warning border
 BATTERY_SLOWDOWN = 2    # every timer runs this much slower on battery
+PS_CACHE_S = 4 if sys.platform.startswith("linux") else 20
 BREATH_FRAME_MS = 80    # the timer ticks this often; a frame is only painted
                         # when the border actually changes (see _breath)
 _ANIMATE = os.environ.get("QT_QPA_PLATFORM") != "offscreen"  # no animation when headless
@@ -257,10 +258,13 @@ class DongleWidget(QWidget):
         mode = self.cfg.get("show_mode", "always")
         if mode == "always":
             return True
-        # poll (data) and _vis_timer each fire every 5s; caching ps for 4s
-        # avoids running the subprocess twice per cycle.
+        # poll (data) and _vis_timer each fire every 5s; the cache keeps the
+        # scan from running twice per cycle. Off Linux the scan is a
+        # subprocess (`ps`/`tasklist`, ~100x the cost of reading /proc), so it
+        # is held much longer — the price of noticing an editor a few seconds
+        # later is smaller than a fork every five seconds all day.
         now = time.monotonic()
-        if self._ps_cache and now - self._ps_cache[0] < 4:
+        if self._ps_cache and now - self._ps_cache[0] < PS_CACHE_S:
             return self._ps_cache[1]
         names = {"claude": ["claude"], "dev": DEV_PROCS,
                  "custom": self.cfg.get("show_processes", [])}.get(mode, [])

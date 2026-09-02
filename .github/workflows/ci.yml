@@ -31,19 +31,31 @@ jobs:
   ui-smoke:
     # Builds the real PyQt6 UI offscreen and renders the README screenshots —
     # catches import errors and widget construction crashes in the UI layer.
-    runs-on: ubuntu-latest
+    # Runs on all three OSes: the UI is where platform differences actually
+    # bite (fonts, platform plugin, native notification path), and none of that
+    # shows up in the stdlib-only tests above.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - run: |
+      - if: runner.os == 'Linux'
+        run: |
           sudo apt-get update
           sudo apt-get install -y libegl1 libglib2.0-0t64 libxkbcommon0 \
             libdbus-1-3 libfontconfig1
       - run: pip install .
-      - run: QT_QPA_PLATFORM=offscreen python scripts/gen_screenshots.py
+      # the console script must at least start: catches a broken entry point
+      - run: claude-dongle
+      - run: python scripts/gen_screenshots.py
       - uses: actions/upload-artifact@v7
         with:
-          name: screenshots
+          name: screenshots-${{ matrix.os }}
           path: docs/*.png

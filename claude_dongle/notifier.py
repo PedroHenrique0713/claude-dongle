@@ -4,10 +4,14 @@ from contextlib import contextmanager
 from .i18n import t as _t
 from .utils import fmt_time as _fmt_time
 
-try:  # POSIX only; Windows falls back to best-effort (no cross-process lock)
+try:
     import fcntl
-except ImportError:  # pragma: no cover - Windows
+except ImportError:  # Windows
     fcntl = None
+try:
+    import msvcrt
+except ImportError:  # POSIX
+    msvcrt = None
 
 
 def _win_toast(title, message):
@@ -72,25 +76,56 @@ def _write_state(path: Path, st: dict):
             pass
 
 
+def _acquire(lock):
+    """Exclusive lock on an open file, blocking. False if the platform has no
+    file locking we can use — then the dance below is best-effort."""
+    if fcntl is not None:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return True
+    if msvcrt is not None:
+        # Windows locks byte RANGES and has no blocking flock: retry a moment
+        # (the critical section is a small read/write, never a network call).
+        for _ in range(50):
+            try:
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                return True
+            except OSError:
+                time.sleep(0.1)
+    return False
+
+
+def _release(lock, held):
+    if not held:
+        return
+    try:
+        if fcntl is not None:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+        elif msvcrt is not None:
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass
+
+
 @contextmanager
 def _locked_state(path):
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    lock = None
-    if fcntl is not None:
-        try:
-            lock = open(str(p) + ".lock", "w")
-            fcntl.flock(lock, fcntl.LOCK_EX)
-        except OSError:
-            lock = None
+    lock = held = None
+    try:
+        lock = open(str(p) + ".lock", "a+")
+        lock.seek(0)
+        held = _acquire(lock)
+    except OSError:
+        lock = None
     st = _read_state(p)
     try:
         yield st
         _write_state(p, st)
     finally:
         if lock is not None:
+            _release(lock, held)
             try:
-                fcntl.flock(lock, fcntl.LOCK_UN)
                 lock.close()
             except OSError:
                 pass
