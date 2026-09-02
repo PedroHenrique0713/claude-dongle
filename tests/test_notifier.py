@@ -208,3 +208,40 @@ def test_limit_back_can_be_turned_off(tmp_path, monkeypatch):
     back["weekly_breakdown"] = _weekly(10.0, reset=9999)
     notifier.check_thresholds(back, st, sent)
     assert not any("is back" in c for c in calls)
+
+
+def test_send_uses_the_right_native_channel_per_platform(monkeypatch):
+    """The three notification paths only ever run on their own OS, so the one
+    thing CI can check is that each builds a sane command."""
+    seen = {}
+    monkeypatch.setattr(notifier.subprocess, "run",
+                        lambda cmd, **k: seen.setdefault("cmd", cmd))
+    monkeypatch.setattr(notifier.subprocess, "Popen",
+                        lambda cmd, **k: seen.setdefault("cmd", cmd))
+
+    monkeypatch.setattr(notifier.sys, "platform", "linux")
+    notifier.send("Title", "Body", "critical")
+    assert seen["cmd"][:2] == ["notify-send", "-a"]
+    assert seen["cmd"][-2:] == ["Title", "Body"]
+    assert "critical" in seen["cmd"]
+
+    seen.clear()
+    monkeypatch.setattr(notifier.sys, "platform", "darwin")
+    notifier.send('say "hi"', "Body")
+    assert seen["cmd"][0] == "osascript"
+    # quotes are escaped, or the AppleScript would end early and fail
+    assert '\\"hi\\"' in seen["cmd"][-1]
+
+    seen.clear()
+    monkeypatch.setattr(notifier.sys, "platform", "win32")
+    notifier.send("Title", "Body")
+    assert seen["cmd"][0] == "powershell"
+
+
+def test_send_never_raises_when_the_channel_is_missing(monkeypatch):
+    def boom(*a, **k):
+        raise FileNotFoundError("notify-send not installed")
+
+    monkeypatch.setattr(notifier.subprocess, "run", boom)
+    monkeypatch.setattr(notifier.sys, "platform", "linux")
+    notifier.send("Title", "Body")  # must not propagate
