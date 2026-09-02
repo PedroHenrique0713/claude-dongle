@@ -35,15 +35,20 @@ login, nothing sent anywhere.
   week, and week-per-model usage. It appears only when it makes sense (e.g. with
   your editor or terminal open) and hides when you're not working.
 - **Overflow forecast** — computes your *burn rate* by regression over recent
-  usage and estimates the ETA to 100%. The border pulses amber when, at the
-  current pace, you'll run out before the reset.
+  usage and estimates the ETA to 100%. The border breathes amber when, at the
+  current pace, you'll run out before the reset, and red when a limit that
+  stops every model is spent. A single model running out (say your weekly
+  Fable) leaves the border alone: the others keep working.
 - **Pace marker** — every ring has a tick for *where you'd be at a linear pace*.
   Fill ahead of the tick = burning fast; behind it = comfortable. You read your
   pace at a glance, no math.
 - **Per-project & per-model usage** — from Claude Code's local logs, it shows
   which projects and models ate your week (with a 14-day heatmap).
-- **Limit notifications** — alerts when you cross a threshold and on the overflow
-  forecast. Works even with the dongle closed, via a background timer.
+- **Limit notifications** — alerts when you cross a threshold, when a limit is
+  reached and on the overflow forecast, each limit tracked as its own series.
+  Everything crossing in the same reading arrives as one notification, a
+  minimum gap paces the routine ones, and you can snooze them all for a while.
+  Works even with the dongle closed, via a background timer.
 - **Cross-platform** — Linux, macOS and Windows, with native autostart on each.
 
 ## 🖼️ Preview
@@ -61,7 +66,7 @@ login, nothing sent anywhere.
   </tr>
   <tr>
     <td align="center"><em>Dashboard</em></td>
-    <td align="center"><em>Forecast &amp; per-project usage, expanded</em></td>
+    <td align="center"><em>Forecast, per-project usage and settings, expanded</em></td>
   </tr>
 </table>
 
