@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import time
 
@@ -144,6 +145,10 @@ def on_battery():
     means False on purpose — a machine we can't measure keeps the normal pace
     instead of being throttled forever.
     """
+    if sys.platform == "win32":
+        return _on_battery_windows()
+    if sys.platform == "darwin":
+        return _on_battery_macos()
     if not sys.platform.startswith("linux"):
         return False
     try:
@@ -164,3 +169,34 @@ def on_battery():
         except OSError:
             continue
     return seen_mains  # every mains supply reported offline
+
+
+def _on_battery_windows():
+    """GetSystemPowerStatus: ACLineStatus 0 = offline, 1 = online, 255 = unknown."""
+    try:
+        import ctypes
+
+        class _Status(ctypes.Structure):
+            _fields_ = [("ACLineStatus", ctypes.c_ubyte),
+                        ("BatteryFlag", ctypes.c_ubyte),
+                        ("BatteryLifePercent", ctypes.c_ubyte),
+                        ("SystemStatusFlag", ctypes.c_ubyte),
+                        ("BatteryLifeTime", ctypes.c_ulong),
+                        ("BatteryFullLifeTime", ctypes.c_ulong)]
+
+        st = _Status()
+        if not ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(st)):
+            return False
+        return st.ACLineStatus == 0
+    except Exception:
+        return False
+
+
+def _on_battery_macos():
+    """`pmset -g batt` opens with "Now drawing from 'AC Power'" / "'Battery Power'"."""
+    try:
+        out = subprocess.check_output(["pmset", "-g", "batt"], text=True,
+                                      timeout=3, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "battery power" in out.lower().split("\n")[0]

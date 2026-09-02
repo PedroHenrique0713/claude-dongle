@@ -89,3 +89,42 @@ def test_on_battery_is_false_off_linux(monkeypatch):
     from claude_dongle import utils
     monkeypatch.setattr(utils.sys, "platform", "darwin")
     assert utils.on_battery() is False
+
+
+def test_on_battery_windows_reads_the_ac_line(monkeypatch):
+    from claude_dongle import utils
+    monkeypatch.setattr(utils.sys, "platform", "win32")
+    calls = {}
+
+    class _FakeStatus:
+        def __init__(self, ac):
+            self.ACLineStatus = ac
+
+    def fake_win(ac, ok=1):
+        def _impl():
+            calls["called"] = True
+            return ac == 0
+        return _impl
+
+    monkeypatch.setattr(utils, "_on_battery_windows", fake_win(0))
+    assert utils.on_battery() is True
+    monkeypatch.setattr(utils, "_on_battery_windows", fake_win(1))
+    assert utils.on_battery() is False
+    assert calls["called"]
+
+
+def test_on_battery_macos_reads_pmset(monkeypatch):
+    from claude_dongle import utils
+    monkeypatch.setattr(utils.sys, "platform", "darwin")
+    monkeypatch.setattr(utils.subprocess, "check_output",
+                        lambda *a, **k: "Now drawing from 'Battery Power'\n -InternalBattery")
+    assert utils.on_battery() is True
+    monkeypatch.setattr(utils.subprocess, "check_output",
+                        lambda *a, **k: "Now drawing from 'AC Power'\n -InternalBattery")
+    assert utils.on_battery() is False
+
+    def boom(*a, **k):
+        raise OSError("pmset missing")
+
+    monkeypatch.setattr(utils.subprocess, "check_output", boom)
+    assert utils.on_battery() is False
