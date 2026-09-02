@@ -20,6 +20,9 @@ DEFAULTS = {
     "thresholds": [50, 70, 85, 95],
     "notify_on_threshold": True,
     "notify_on_limit": True,
+    "notify_on_telemetry": True,   # warn when the monitor loses its data source
+    # Minimum gap between two routine notifications (critical ones ignore it).
+    "notify_cooldown_minutes": 15,
     "telemetry_stale_minutes": 60,  # no fresh data for X min → warn once
     "claude_dir": str(Path.home() / ".claude"),
     "dongle_opacity": 0.85,
@@ -35,6 +38,7 @@ DEFAULTS = {
     "forecast_notify": True,       # notify on predicted overflow before the reset
     "forecast_expanded": False,    # Forecast section starts collapsed
     "projects_expanded": False,    # "By project" section starts collapsed
+    "settings_expanded": False,    # Settings section starts collapsed
 }
 
 

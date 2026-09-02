@@ -1,6 +1,12 @@
-import subprocess, json, time, sys, os
+import subprocess, json, os, time, sys, tempfile
 from pathlib import Path
+from contextlib import contextmanager
 from .utils import fmt_time as _fmt_time
+
+try:  # POSIX only; Windows falls back to best-effort (no cross-process lock)
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
 
 
 def _win_toast(title, message):
@@ -33,6 +39,74 @@ def send(title: str, message: str, urgency: str = "normal"):
                 capture_output=True, timeout=5)
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------- state file
+# The dongle (every poll) and the systemd timer (every 10 min) are DIFFERENT
+# processes sharing this file. Without a lock both read the same "not sent yet"
+# state and both notify — that is half of the duplicate alerts. The whole
+# read → decide → send → write cycle runs under an exclusive lock.
+
+def _read_state(path: Path) -> dict:
+    try:
+        raw = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if isinstance(raw, list):  # pre-cooldown format: a bare list of sent keys
+        return {"keys": raw}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _write_state(path: Path, st: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".sent-")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(st, f)
+        os.replace(tmp, path)  # atomic: a reader never sees a half-written file
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+@contextmanager
+def _locked_state(path):
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    lock = None
+    if fcntl is not None:
+        try:
+            lock = open(str(p) + ".lock", "w")
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        except OSError:
+            lock = None
+    st = _read_state(p)
+    try:
+        yield st
+        _write_state(p, st)
+    finally:
+        if lock is not None:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+                lock.close()
+            except OSError:
+                pass
+
+
+def mute(sent_path, minutes: int):
+    """Silence every usage notification for N minutes (0 = unmute now)."""
+    with _locked_state(sent_path) as st:
+        st["muted_until"] = time.time() + minutes * 60 if minutes else 0
+        return st["muted_until"]
+
+
+def muted_until(sent_path) -> float:
+    """Epoch until which notifications are silenced (0 = not muted)."""
+    st = _read_state(Path(sent_path))
+    until = st.get("muted_until") or 0
+    return until if until > time.time() else 0
 
 
 def _weekly_series(usage: dict) -> list:
@@ -75,6 +149,8 @@ def check_telemetry(usage: dict, state: dict, flag_path: str) -> bool:
     token / API down) — otherwise the failure is completely silent. The on-disk
     flag resets by itself when data comes back, avoiding spam.
     """
+    if not state.get("notify_on_telemetry", True):
+        return False
     limit_s = int(state.get("telemetry_stale_minutes", 60)) * 60
     healthy = usage.get("source") == "api" and not usage.get("stale")
     fp = Path(flag_path)
@@ -113,21 +189,16 @@ def check_telemetry(usage: dict, state: dict, flag_path: str) -> bool:
     return triggered
 
 
-def check_thresholds(usage: dict, state: dict, sent_path: str) -> bool:
+def _events(usage: dict, state: dict, sent: set) -> list:
+    """Alerts this reading earns, as {title, body, urgency, keys}. Nothing is
+    sent here: the caller aggregates so one poll produces ONE notification."""
     pct = usage["pct"]
-    if pct is None:
-        return False
     pct_5h = usage.get("pct_5h")
-    sent_file = Path(sent_path)
-    sent = set()
-    if sent_file.exists():
-        sent = set(json.loads(sent_file.read_text()))
-
     # Keys carry the window's reset epoch: each new window starts clean and
     # keys from past windows are dropped on save.
     w_epoch = usage.get("reset_7d_epoch") or 0
     s_epoch = usage.get("reset_5h_epoch") or 0
-    thresholds = sorted(state["thresholds"])
+    thresholds = sorted({int(t) for t in state["thresholds"] if 0 < int(t) < 100})
     fc = usage.get("forecast") or {}
     forecast_on = state.get("forecast_notify", True) and not usage.get("stale")
     threshold_on = state.get("notify_on_threshold", True)
@@ -150,7 +221,7 @@ def check_thresholds(usage: dict, state: dict, sent_path: str) -> bool:
             "fc": fc.get(s["fc_key"]) or {}, "fc_floor": 30,
         })
 
-    triggered = False
+    events = []
     for b in buckets:
         label, bpct, secs, pref = b["label"], b["pct"], b["secs"], b["prefix"]
         reset = f"Resets in {_fmt_time(secs)}"
@@ -161,22 +232,22 @@ def check_thresholds(usage: dict, state: dict, sent_path: str) -> bool:
         # only marked as seen.
         if threshold_on:
             crossed = [t for t in thresholds
-                       if t < 100 and bpct >= t and f"{pref}{t}" not in sent]
+                       if bpct >= t and f"{pref}{t}" not in sent]
             if crossed:
-                for t in crossed:
-                    sent.add(f"{pref}{t}")
-                if bpct < 100:  # at 100%+ the limit notification below covers it
+                keys = [f"{pref}{t}" for t in crossed]
+                if bpct < 100:  # at 100%+ the limit event below covers it
                     top = max(crossed)
-                    send(f"{label} · {bpct:.0f}%", reset,
-                         "critical" if top >= 95 else "normal")
-                    triggered = True
+                    events.append({"title": f"{label} · {bpct:.0f}%", "body": reset,
+                                   "urgency": "critical" if top >= 95 else "normal",
+                                   "keys": keys})
+                else:
+                    events.append({"title": None, "body": None, "keys": keys})
 
         key = f"{pref}limit"
         if limit_on and bpct >= 100 and key not in sent:
-            send(f"{label} · 100%", f"Limit reached · {reset.lower()}",
-                 "critical")
-            sent.add(key)
-            triggered = True
+            events.append({"title": f"{label} · 100%",
+                           "body": f"Limit reached · {reset.lower()}",
+                           "urgency": "critical", "keys": [key]})
 
         # Forecast: at the current pace this bucket overflows before the reset.
         # Once per window and only above a floor — early in the window the
@@ -185,18 +256,76 @@ def check_thresholds(usage: dict, state: dict, sent_path: str) -> bool:
         key = f"{pref}forecast"
         if (forecast_on and f.get("overflow_before_reset")
                 and b["fc_floor"] <= bpct < 100 and key not in sent):
-            send(
-                f"{label} · overflow forecast",
-                f"{bpct:.0f}% now · +{f['rate_pph']:.1f} pp/h · "
-                f"overflows in {_fmt_time(f['eta_seconds'])}, "
-                f"before the reset in {_fmt_time(secs)}",
-                "critical"
-            )
-            sent.add(key)
+            events.append({
+                "title": f"{label} · overflow forecast",
+                "body": (f"{bpct:.0f}% now · +{f['rate_pph']:.1f} pp/h · "
+                         f"overflows in {_fmt_time(f['eta_seconds'])}, "
+                         f"before the reset in {_fmt_time(secs)}"),
+                "urgency": "critical", "keys": [key]})
+    return events
+
+
+def _adopt_keys(keys, w_epoch, s_epoch) -> set:
+    """Re-stamp keys written before reset epochs were rounded to the minute.
+
+    The same window used to be keyed as X on one reading and X-1 on the next,
+    so every flip looked like a brand-new window and re-fired the alerts. The
+    rounding fixed that going forward; this adopts what is already on disk so
+    upgrading doesn't produce one last spurious round."""
+    out = set()
+    for k in keys:
+        prefix, sep, rest = str(k).partition(":")
+        if not sep or prefix[:1] not in ("w", "s"):
+            out.add(k)
+            continue
+        try:
+            epoch = int(prefix[1:])
+        except ValueError:
+            out.add(k)
+            continue
+        target = w_epoch if prefix[0] == "w" else s_epoch
+        if target and abs(epoch - target) <= 60:
+            epoch = target
+        out.add(f"{prefix[0]}{epoch}:{rest}")
+    return out
+
+
+def check_thresholds(usage: dict, state: dict, sent_path: str) -> bool:
+    if usage.get("pct") is None:
+        return False
+    w_epoch = usage.get("reset_7d_epoch") or 0
+    s_epoch = usage.get("reset_5h_epoch") or 0
+    cooldown = max(0, int(state.get("notify_cooldown_minutes", 15))) * 60
+    now = time.time()
+
+    with _locked_state(sent_path) as st:
+        sent = _adopt_keys(st.get("keys") or [], w_epoch, s_epoch)
+        events = _events(usage, state, sent)
+        for e in events:  # a key is spent once it is decided, sent or not
+            sent.update(e["keys"])
+        speak = [e for e in events if e.get("title")]
+
+        triggered = False
+        muted = (st.get("muted_until") or 0) > now
+        # The cooldown paces routine alerts; a critical one (limit reached,
+        # overflow forecast) is never held back — it is the alert that matters
+        # and the dedup already caps it at one per window.
+        urgent = any(e["urgency"] == "critical" for e in speak)
+        paced = urgent or now - (st.get("last_sent") or 0) >= cooldown
+        # One notification per reading. Several buckets crossing at the same
+        # time used to mean several pop-ups; they now share one, and the
+        # cooldown keeps consecutive readings from stacking up.
+        if speak and not muted and paced:
+            if len(speak) == 1:
+                send(speak[0]["title"], speak[0]["body"], speak[0]["urgency"])
+            else:
+                urgency = ("critical" if any(e["urgency"] == "critical" for e in speak)
+                           else "normal")
+                send("Usage limits",
+                     "\n".join(f"{e['title']} · {e['body']}" for e in speak), urgency)
+            st["last_sent"] = now
             triggered = True
 
-    sent = {k for k in sent
-            if k.startswith(f"w{w_epoch}:") or k.startswith(f"s{s_epoch}:")}
-    sent_file.parent.mkdir(parents=True, exist_ok=True)
-    sent_file.write_text(json.dumps(sorted(sent)))
+        st["keys"] = sorted(k for k in sent
+                            if k.startswith(f"w{w_epoch}:") or k.startswith(f"s{s_epoch}:"))
     return triggered
