@@ -19,6 +19,7 @@ DEFAULTS = {
     # "auto" follows the system language (pt-BR when it speaks Portuguese),
     # or pin it: "en" / "pt-BR".
     "language": "auto",
+    "battery_saver": True,         # halve the timers while on battery
     "poll_interval": 5,
     "thresholds": [50, 70, 85, 95],
     "notify_on_threshold": True,

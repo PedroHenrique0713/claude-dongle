@@ -77,6 +77,8 @@ EN = {
 
     # settings
     "set.opacity": "Opacity",
+    "set.battery_saver": "Slow down on battery",
+    "meta.on_battery": "battery mode",
     "vis.always": "Always visible",
     "vis.claude": "Only with Claude Code",
     "vis.dev": "Only with VS Code / terminal",
@@ -187,6 +189,8 @@ PT = {
     "pj.heatmap_tip": "à direita = mais recente · tom = uso",
 
     "set.opacity": "Opacidade",
+    "set.battery_saver": "Ir mais devagar na bateria",
+    "meta.on_battery": "modo bateria",
     "vis.always": "Sempre visível",
     "vis.claude": "Só com o Claude Code",
     "vis.dev": "Só com VS Code / terminal",
