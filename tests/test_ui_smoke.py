@@ -89,10 +89,18 @@ def test_dashboard_fits_the_screen_and_shows_what_is_spent(app):
     w.show()
     app.processEvents()
     assert w.width() == 440
-    assert w.height() <= w.maximumHeight()
     screen = w.screen()
-    if screen is not None:
-        assert w.height() <= screen.availableGeometry().height()
+    assert screen is not None, "no screen: the height cap can't be verified"
+    avail = screen.availableGeometry().height()
+    # The cap must actually be in place — comparing against the default
+    # maximum (16777215) would pass no matter what the code did.
+    assert w.maximumHeight() < 16777215
+    assert w.maximumHeight() <= avail
+    assert w.height() <= avail
+    # ...and with every section open the content really is taller than the cap,
+    # so this window IS the scrolling case, not a small panel that happens to fit
+    assert w.scroll.widget().sizeHint().height() > w.height()
+    assert w.scroll.verticalScrollBar().maximum() > 0
     assert w.avail.isVisible() and "Fable" in w.avail.text()
     assert w.meta.text().startswith("official API")
     w.close()
