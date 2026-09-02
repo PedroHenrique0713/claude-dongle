@@ -3,10 +3,10 @@ import subprocess, time, math, sys, os
 from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtCore import Qt, QTimer, QRectF, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import (QPainter, QColor, QBrush, QPen, QFont, QFontMetrics,
-                         QLinearGradient, QPainterPath, QRegion)
+                         QPainterPath, QRegion)
 
 from . import monitor, config, notifier, usage_api
-from .utils import (color as _color, fmt_time as _fmt_time,
+from .utils import (color as _color, fmt_time as _fmt_time, limits_blocking,
                    FG, FG2, FG3, ORANGE, RED, UI_FONT)
 
 SENT_PATH = str(config.CONFIG_DIR / "sent_thresholds.json")
@@ -19,6 +19,9 @@ BAR_Y = 27.0
 CLICK_SLOP = 8  # manhattan px: below this the release counts as a click
 HOT_RESET_S = 30 * 60  # session resetting sooner than this: countdown gets highlighted
 VIS_CHECK_MS = 5000  # visibility trigger (opening/closing a terminal reacts fast)
+BREATH_PERIOD_S = 5.5   # one full in/out of the warning border
+BREATH_FRAME_MS = 80    # the timer ticks this often; a frame is only painted
+                        # when the border actually changes (see _breath)
 _ANIMATE = os.environ.get("QT_QPA_PLATFORM") != "offscreen"  # no animation when headless
 
 # comm of the processes that mean "working on dev" (show_mode=dev mode)
@@ -27,20 +30,42 @@ DEV_PROCS = ["code", "cursor", "ptyxis", "gnome-terminal", "kgx", "konsole",
              "iterm", "terminal"]
 
 
-def _list_processes():
-    """Running process names, lowercase. Empty if unavailable.
-    Cross-platform: tasklist on Windows, ps on Linux/macOS."""
+def _process_names():
+    """Yields running process names, lowercase. Empty if unavailable.
+
+    On Linux this reads /proc directly instead of forking `ps`: measured at
+    14ms against 114ms, and the caller stops at the first match, so the
+    visibility check every 5s stopped costing ~2% of a core all day.
+    macOS/Windows keep the subprocess (no /proc there).
+    """
+    if sys.platform.startswith("linux"):
+        try:
+            entries = os.scandir("/proc")
+        except OSError:
+            return
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            try:
+                with open(entry.path + "/comm") as f:
+                    yield f.read().strip().lower()
+            except OSError:  # the process died between the scan and the read
+                continue
+        return
     try:
         if sys.platform == "win32":
             out = subprocess.check_output(
                 ["tasklist", "/fo", "csv", "/nh"], text=True, timeout=3)
-            return [ln.split('","')[0].lstrip('"').lower()
-                    for ln in out.splitlines() if ln]
+            for ln in out.splitlines():
+                if ln:
+                    yield ln.split('","')[0].lstrip('"').lower()
+            return
         out = subprocess.check_output(["ps", "-eo", "comm="], text=True, timeout=3)
         # comm may include a path on macOS: keep just the basename
-        return [l.strip().rsplit("/", 1)[-1].lower() for l in out.splitlines()]
+        for line in out.splitlines():
+            yield line.strip().rsplit("/", 1)[-1].lower()
     except Exception:
-        return []
+        return
 
 
 class DongleWidget(QWidget):
@@ -80,7 +105,9 @@ class DongleWidget(QWidget):
         self._reset_5h_epoch = None  # epoch for live countdown (recomputed on paint)
         self._reset_w_epoch = None
         self._overflow = False    # some bucket forecast to overflow before the reset
-        self._critical = False    # some pct >= 95: border pulses
+        self._critical = False    # a limit that blocks everything is exhausted
+        self._paint_stamp = None  # last countdown text painted (skips no-op repaints)
+        self._breath_frame = None # last border frame painted (same idea)
         self._hidden = False
         self._idle_secs = 0
         self._ps_cache = None     # (t_monotonic, visible) so ps doesn't run 2x/5s
@@ -148,8 +175,36 @@ class DongleWidget(QWidget):
         self._anim_timer.start(1000)
         self.poll()
 
+    def _breath(self):
+        """(alpha, width) of the warning border right now.
+
+        Slow sine (≈5.5s) smoothed by a smoothstep: it lingers at the ends the
+        way breath does instead of strobing at the corner of the eye.
+        """
+        phase = (math.sin(time.monotonic() * math.tau / BREATH_PERIOD_S) + 1) / 2
+        b = phase * phase * (3 - 2 * phase)
+        return int(70 + 120 * b), round(1.2 + 1.0 * b, 1)
+
     def _on_anim(self):
-        if not self._hidden:
+        if self._hidden:
+            return
+        # Breathing border: repaint only when the border really changes. The
+        # curve is flat at both ends, so a fixed frame rate spent most of its
+        # repaints drawing the identical pixels — and a repaint here costs
+        # ~2.7ms on XCB, which is what made an idle dongle burn ~5% of a core.
+        if self._critical or self._overflow:
+            frame = self._breath()
+            if frame != self._breath_frame:
+                self._breath_frame = frame
+                self.update()
+            return
+        # Otherwise the only moving part is the session countdown, and
+        # fmt_time's finest unit is the minute — repainting once a second was
+        # 59 wasted repaints a minute, all day, on a laptop.
+        secs = self._live_secs(self._reset_5h_epoch, self._reset_5h)
+        stamp = (_fmt_time(secs), secs is not None and secs <= HOT_RESET_S)
+        if stamp != self._paint_stamp:
+            self._paint_stamp = stamp
             self.update()
 
     def _tick_visibility(self):
@@ -186,9 +241,10 @@ class DongleWidget(QWidget):
         if names:
             # prefix match (Linux comm truncates at 15 chars); never a
             # substring over the whole blob ("code" would match "opencode")
-            procs = _list_processes()
             names = [n.lower() for n in names]
-            visible = any(p.startswith(n) for p in procs for n in names)
+            # generator + any(): stops at the first matching process instead
+            # of listing every process on the machine
+            visible = any(p.startswith(n) for p in _process_names() for n in names)
         self._ps_cache = (now, visible)
         return visible
 
@@ -248,12 +304,15 @@ class DongleWidget(QWidget):
             # short-term burn rate extrapolated over days while usage is still low.
             self._overflow = (not self._stale) and any(
                 v.get("alert") for v in fcs.values())
-            pcts = [p for p in (self._s_pct, self._w_all, self._scoped_pct)
-                    if p is not None]
-            self._critical = (not self._stale) and any(p >= 95 for p in pcts)
-            # fast pulse only when critical/overflow; else 1s just for the countdown
+            # A scoped model running out (Fable at 100%) does NOT stop the
+            # work — the other models keep going against the overall week. Red
+            # is for the limits that stop EVERYTHING: the 5h session and the
+            # overall week. The scoped number already turns red on its own.
+            self._critical = (not self._stale) and limits_blocking(
+                self._s_pct, self._w_all)
+            # smooth frames while breathing; else 1s just for the countdown
             self._anim_timer.setInterval(
-                90 if (self._critical or self._overflow) else 1000)
+                BREATH_FRAME_MS if (self._critical or self._overflow) else 1000)
             self._update_tooltip()
 
             self.update()
@@ -289,23 +348,19 @@ class DongleWidget(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-
         body = QPainterPath()
         body.addRoundedRect(QRectF(0.5, 0.5, DONGLE_W - 1, DONGLE_H - 1),
                             DONGLE_R - 0.5, DONGLE_R - 0.5)
-        bg = QLinearGradient(0, 0, 0, DONGLE_H)
-        bg.setColorAt(0.0, QColor("#26262a"))
-        bg.setColorAt(1.0, QColor("#18181b"))
-        p.setBrush(QBrush(bg))
+        p.setBrush(QBrush(QColor("#000000")))
         # Pulsing border: red when some limit crossed 95%, amber when an
         # overflow is forecast — at-a-glance warning without cluttering the 216×36.
         if self._critical or self._overflow:
-            pulse = (math.sin(time.monotonic() * 5) + 1) / 2  # 0..1
+            alpha, width = self._breath()
             edge = QColor(RED if self._critical else ORANGE)
-            edge.setAlpha(int(150 + 105 * pulse))
-            p.setPen(QPen(edge, 1.5 + 0.8 * pulse))
+            edge.setAlpha(alpha)
+            p.setPen(QPen(edge, width))
         else:
-            p.setPen(QPen(QColor("#3a3a3f"), 1))
+            p.setPen(QPen(QColor("#2c2c31"), 1))
         p.drawPath(body)
 
         row = lambda x, w: QRectF(x, 4, w, 20)
