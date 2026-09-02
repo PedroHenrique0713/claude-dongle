@@ -54,6 +54,7 @@ jobs:
       - run: pip install .
       # the console script must at least start: catches a broken entry point
       - run: claude-dongle
+      - run: python scripts/font_check.py
       - run: python scripts/gen_screenshots.py
       - uses: actions/upload-artifact@v7
         with:
