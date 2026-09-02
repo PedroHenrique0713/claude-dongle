@@ -51,10 +51,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libegl1 libglib2.0-0t64 libxkbcommon0 \
             libdbus-1-3 libfontconfig1
-      - run: pip install .
+      - run: pip install . pytest
       # the console script must at least start: catches a broken entry point
       - run: claude-dongle
       - run: python scripts/font_check.py
+      # behaviour of the real widgets, on every OS: pixels can't be
+      # compared (the Windows runner has no fonts), geometry and text can
+      - run: python -m pytest tests/test_ui_smoke.py -q
       - run: python scripts/gen_screenshots.py
       - uses: actions/upload-artifact@v7
         with:
