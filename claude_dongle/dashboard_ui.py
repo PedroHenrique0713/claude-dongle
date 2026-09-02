@@ -4,7 +4,7 @@ if sys.platform.startswith("linux"):
 
 from . import monitor, config, history, projects, notifier, i18n
 from .i18n import t as _t
-from .utils import (color, fmt_time, RED, ORANGE, GREEN, BG, BG2, BG3, FG, FG2, FG3, SEP,
+from .utils import (color, fmt_time, availability_text, RED, ORANGE, GREEN, BG, BG2, BG3, FG, FG2, FG3, SEP,
                    ACCENT, ACCENT2, SURFACE, SURFACE_HI, UI_FONT, UI_FONT_STACK)
 
 
@@ -230,6 +230,13 @@ class UsageRing(QWidget):
         if window_s and seconds is not None:
             pace = max(0.0, min(1.0, 1 - seconds / window_s))
         self._pace = pace
+        if pct >= 100 and not stale:
+            # a spent window has no "pace" left to comment on; what matters is
+            # when it comes back
+            self._sub = (_t("avail.ring_spent", time=fmt_time(seconds))
+                         if seconds is not None else _t("avail.ring_spent", time="--"))
+            self._animate_to(prev, pct)
+            return
         sub = fmt_time(seconds) if seconds is not None else ""
         if pace is not None and not stale:  # usage vs. elapsed time
             expected = pace * 100
@@ -240,6 +247,9 @@ class UsageRing(QWidget):
             else:
                 sub += "  ·  " + _t("pace.on")
         self._sub = sub
+        self._animate_to(prev, pct)
+
+    def _animate_to(self, prev, pct):
         # animate arc/number from the previous value (or 0 on first show) to the new one
         if _ANIMATE and (prev is None or abs(prev - pct) > 0.05):
             self._anim.stop()
@@ -855,6 +865,12 @@ class DashboardWidget(QWidget):
         self.rings_box.addWidget(self.ring_7d)
         ubox.addLayout(self.rings_box)
         ubox.addSpacing(14)
+        self.avail = QLabel("")
+        self.avail.setStyleSheet(f"color: {ORANGE}; font-size: 11px; font-weight: 600;")
+        self.avail.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self.avail.setWordWrap(True)
+        self.avail.setVisible(False)
+        ubox.addWidget(self.avail)
         self.meta = QLabel("")
         self.meta.setStyleSheet(f"color: {FG3}; font-size: 11px;")
         self.meta.setAlignment(Qt.AlignmentFlag.AlignHCenter)
@@ -1030,6 +1046,7 @@ class DashboardWidget(QWidget):
         self._render_usage_rows(u)
         self._render_forecast(u)
         self.meta.setText(self._meta_text(u))
+        self._render_availability(u)
         if self._pj_open:
             self._kick_projects()  # cheap incremental; lock prevents concurrency
             self._render_projects()
@@ -1134,6 +1151,14 @@ class DashboardWidget(QWidget):
             if model not in seen_fc:
                 self._fc_scoped.pop(model).deleteLater()
 
+    def _render_availability(self, u):
+        text = availability_text(u)
+        self.avail.setText(text or "")
+        self.avail.setVisible(bool(text))
+        self.avail.setStyleSheet(
+            "color: %s; font-size: 11px; font-weight: 600;"
+            % (RED if (u.get("availability") or {}).get("everything_blocked") else ORANGE))
+
     def _meta_text(self, u):
         parts = [_source_label(u.get("source"))]
         if u.get("stale"):
@@ -1171,6 +1196,7 @@ class DashboardWidget(QWidget):
         ("notif.threshold_crossed", "notify_on_threshold", True),
         ("notif.limit_reached", "notify_on_limit", True),
         ("notif.overflow_forecast", "forecast_notify", True),
+        ("notif.limit_freed", "notify_on_reset", True),
         ("notif.telemetry_lost", "notify_on_telemetry", True),
     ]
     COOLDOWNS = [("notif.off", 0), ("5m", 5), ("15m", 15), ("30m", 30), ("1h", 60)]

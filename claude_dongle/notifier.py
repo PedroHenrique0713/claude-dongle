@@ -190,9 +190,13 @@ def check_telemetry(usage: dict, state: dict, flag_path: str) -> bool:
     return triggered
 
 
-def _events(usage: dict, state: dict, sent: set) -> list:
+def _events(usage: dict, state: dict, sent: set, spent: dict) -> list:
     """Alerts this reading earns, as {title, body, urgency, keys}. Nothing is
-    sent here: the caller aggregates so one poll produces ONE notification."""
+    sent here: the caller aggregates so one poll produces ONE notification.
+
+    `spent` maps a bucket tag to the window epoch where it hit 100%; it is
+    updated in place so the caller can persist it and recognise the moment the
+    limit comes back."""
     pct = usage["pct"]
     pct_5h = usage.get("pct_5h")
     # Keys carry the window's reset epoch: each new window starts clean and
@@ -211,18 +215,23 @@ def _events(usage: dict, state: dict, sent: set) -> list:
     buckets = []
     if pct_5h is not None:
         buckets.append({
-            "label": _t("n.session"), "pct": pct_5h,
+            "label": _t("n.session"), "pct": pct_5h, "tag": "5h", "epoch": s_epoch,
             "secs": usage.get("seconds_until_reset_5h"),
             "prefix": f"s{s_epoch}:", "fc": fc.get("5h") or {}, "fc_floor": 50,
         })
     for s in _weekly_series(usage):
         buckets.append({
             "label": s["label"], "pct": s["pct"], "secs": s["secs"],
+            "tag": s["tag"], "epoch": w_epoch,
             "prefix": f"w{w_epoch}:{s['tag']}:",
             "fc": fc.get(s["fc_key"]) or {}, "fc_floor": 30,
         })
 
     events = []
+    # A limit coming back is news too: the old code only ever spoke on the way
+    # up, so after "Fable 100%" you had to poll the dongle by eye to learn you
+    # could work again.
+    freed_on = state.get("notify_on_reset", True)
     for b in buckets:
         label, bpct, secs, pref = b["label"], b["pct"], b["secs"], b["prefix"]
         reset = _t("n.resets_in", time=_fmt_time(secs))
@@ -245,6 +254,21 @@ def _events(usage: dict, state: dict, sent: set) -> list:
                         "keys": keys})
                 else:
                     events.append({"title": None, "body": None, "keys": keys})
+
+        # Back under the limit, in a window later than the one that ran out.
+        tag = b["tag"]
+        if tag in spent:
+            if bpct < 100 and spent[tag] != b["epoch"]:
+                if freed_on:
+                    events.append({"title": _t("n.freed_title", label=label),
+                                   "body": _t("n.freed_body"),
+                                   "urgency": "normal", "keys": []})
+                spent.pop(tag, None)
+            elif bpct < 100 and spent[tag] == b["epoch"]:
+                # same window, below 100 again: the API corrected itself
+                spent.pop(tag, None)
+        if bpct >= 100:
+            spent[tag] = b["epoch"]
 
         key = f"{pref}limit"
         if limit_on and bpct >= 100 and key not in sent:
@@ -304,7 +328,8 @@ def check_thresholds(usage: dict, state: dict, sent_path: str) -> bool:
 
     with _locked_state(sent_path) as st:
         sent = _adopt_keys(st.get("keys") or [], w_epoch, s_epoch)
-        events = _events(usage, state, sent)
+        spent = dict(st.get("spent") or {})
+        events = _events(usage, state, sent, spent)
         for e in events:  # a key is spent once it is decided, sent or not
             sent.update(e["keys"])
         speak = [e for e in events if e.get("title")]
@@ -330,6 +355,7 @@ def check_thresholds(usage: dict, state: dict, sent_path: str) -> bool:
             st["last_sent"] = now
             triggered = True
 
+        st["spent"] = spent
         st["keys"] = sorted(k for k in sent
                             if k.startswith(f"w{w_epoch}:") or k.startswith(f"s{s_epoch}:"))
     return triggered

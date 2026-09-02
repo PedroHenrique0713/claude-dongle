@@ -23,6 +23,7 @@ DEFAULTS = {
     "thresholds": [50, 70, 85, 95],
     "notify_on_threshold": True,
     "notify_on_limit": True,
+    "notify_on_reset": True,       # tell me when a spent limit comes back
     "notify_on_telemetry": True,   # warn when the monitor loses its data source
     # Minimum gap between two routine notifications (critical ones ignore it).
     "notify_cooldown_minutes": 15,

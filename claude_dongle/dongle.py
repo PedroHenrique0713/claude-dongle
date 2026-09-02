@@ -8,6 +8,7 @@ from PyQt6.QtGui import (QPainter, QColor, QBrush, QPen, QFont, QFontMetrics,
 from . import monitor, config, notifier, usage_api
 from .i18n import t as _t
 from .utils import (color as _color, fmt_time as _fmt_time, limits_blocking,
+                   availability_text,
                    FG, FG2, FG3, ORANGE, RED, UI_FONT)
 
 SENT_PATH = str(config.CONFIG_DIR / "sent_thresholds.json")
@@ -107,6 +108,7 @@ class DongleWidget(QWidget):
         self._reset_w_epoch = None
         self._overflow = False    # some bucket forecast to overflow before the reset
         self._critical = False    # a limit that blocks everything is exhausted
+        self._availability = None # what is spent right now (tooltip)
         self._paint_stamp = None  # last countdown text painted (skips no-op repaints)
         self._breath_frame = None # last border frame painted (same idea)
         self._hidden = False
@@ -310,6 +312,7 @@ class DongleWidget(QWidget):
             # work — the other models keep going against the overall week. Red
             # is for the limits that stop EVERYTHING: the 5h session and the
             # overall week. The scoped number already turns red on its own.
+            self._availability = u.get("availability")
             self._critical = (not self._stale) and limits_blocking(
                 self._s_pct, self._w_all)
             # smooth frames while breathing; else 1s just for the countdown
@@ -346,6 +349,11 @@ class DongleWidget(QWidget):
         if self._scoped_pct is not None:
             lines.append(_t("tip.week_model", model=self._scoped_name,
                             pct=f"{self._scoped_pct:.0f}"))
+        spent = availability_text({"availability": self._availability,
+                                   "seconds_until_reset": self._reset_w,
+                                   "seconds_until_reset_5h": self._reset_5h})
+        if spent:
+            lines.append(spent)
         if self._overflow:
             lines.append(_t("tip.overflow"))
         lines.append(_t("tip.actions"))

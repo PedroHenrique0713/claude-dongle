@@ -14,6 +14,12 @@ LANGUAGES = [("EN", "en"), ("PT-BR", "pt-BR")]
 EN = {
     "app.title": "Claude Dongle",
 
+    # availability
+    "avail.spent_scope": "{model} is spent · back in {time} · the other models keep working",
+    "avail.spent_all": "{label} is spent · back in {time} · nothing runs until then",
+    "avail.spent_all_notime": "{label} is spent · nothing runs until it resets",
+    "avail.ring_spent": "{time}  ·  spent",
+
     # cards / sections
     "card.usage": "Usage",
     "card.dongle": "Dongle",
@@ -70,6 +76,7 @@ EN = {
     "notif.threshold_crossed": "Threshold crossed",
     "notif.limit_reached": "Limit reached (100%)",
     "notif.overflow_forecast": "Overflow forecast",
+    "notif.limit_freed": "Limit came back",
     "notif.telemetry_lost": "Data source lost",
     "notif.gap_hint": "Minimum gap between routine alerts — a limit reached always goes through",
     "notif.off": "Off",
@@ -91,6 +98,8 @@ EN = {
     "n.forecast_title": "{label} · overflow forecast",
     "n.forecast_body": "{pct}% now · +{rate} pp/h · overflows in {eta}, "
                        "before the reset in {reset}",
+    "n.freed_title": "{label} is back",
+    "n.freed_body": "the limit reset · you can work again",
     "n.multi_title": "Usage limits",
     "n.telemetry_title": "No usage telemetry",
     "n.telemetry_body": "No fresh data for {time} — the token may have expired "
@@ -112,6 +121,11 @@ EN = {
 }
 
 PT = {
+    "avail.spent_scope": "{model} esgotado · volta em {time} · os outros modelos seguem",
+    "avail.spent_all": "{label} esgotada · volta em {time} · nada roda até lá",
+    "avail.spent_all_notime": "{label} esgotada · nada roda até o reset",
+    "avail.ring_spent": "{time}  ·  esgotado",
+
     "card.usage": "Uso",
     "card.dongle": "Dongle",
     "card.visibility": "Visibilidade",
@@ -162,6 +176,7 @@ PT = {
     "notif.threshold_crossed": "Limite parcial atingido",
     "notif.limit_reached": "Limite estourado (100%)",
     "notif.overflow_forecast": "Previsão de estouro",
+    "notif.limit_freed": "Limite liberado",
     "notif.telemetry_lost": "Perda da fonte de dados",
     "notif.gap_hint": "Intervalo mínimo entre avisos de rotina — limite estourado sempre passa",
     "notif.off": "Nunca",
@@ -182,6 +197,8 @@ PT = {
     "n.forecast_title": "{label} · previsão de estouro",
     "n.forecast_body": "{pct}% agora · +{rate} pp/h · estoura em {eta}, "
                        "antes do reset em {reset}",
+    "n.freed_title": "{label} liberada",
+    "n.freed_body": "o limite resetou · dá para voltar a trabalhar",
     "n.multi_title": "Limites de uso",
     "n.telemetry_title": "Sem telemetria de uso",
     "n.telemetry_body": "Nenhum dado novo há {time} — o token pode ter expirado "

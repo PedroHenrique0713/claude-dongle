@@ -1,4 +1,5 @@
 import sys
+import time
 
 from .i18n import t as _t
 
@@ -70,3 +71,61 @@ def limits_blocking(pct_5h, pct_week_all, threshold=100):
     cried wolf. Only the 5h session and the overall week stop the work.
     """
     return any(p is not None and p >= threshold for p in (pct_5h, pct_week_all))
+
+def availability(pct_5h, weekly):
+    """What can still be used right now.
+
+    weekly: the weekly_breakdown list ({kind, model, pct, reset}).
+    Returns {"blocked": [{label, reset, scope}], "everything_blocked": bool},
+    where scope=None means a limit that stops every model. A scoped model at
+    100% only blocks itself — the others keep running against the overall
+    week, which is why it never counts as everything_blocked.
+    """
+    blocked = []
+    everything = False
+    if pct_5h is not None and pct_5h >= 100:
+        blocked.append({"label": None, "scope": None, "reset": None, "kind": "session"})
+        everything = True
+    for w in weekly or []:
+        pct = w.get("pct")
+        if pct is None or pct < 100:
+            continue
+        if w.get("kind") == "weekly_all":
+            blocked.append({"label": None, "scope": None, "reset": w.get("reset"),
+                            "kind": "weekly_all"})
+            everything = True
+        elif w.get("kind") == "weekly_scoped":
+            blocked.append({"label": w.get("model"), "scope": w.get("model"),
+                            "reset": w.get("reset"), "kind": "weekly_scoped"})
+    return {"blocked": blocked, "everything_blocked": everything}
+
+
+def availability_text(usage):
+    """One line saying what is spent and when it comes back, or None.
+
+    Shared by the panel and the dongle tooltip so they can never disagree
+    about whether work is still possible.
+    """
+    av = usage.get("availability") or {}
+    blocked = av.get("blocked") or []
+    if not blocked:
+        return None
+    now = time.time()
+
+    def left(reset):
+        return fmt_time(max(0, int(reset - now))) if reset else None
+
+    if av.get("everything_blocked"):
+        hard = next(b for b in blocked if b["scope"] is None)
+        session = hard["kind"] == "session"
+        label = _t("usage.session") if session else _t("usage.week")
+        t_left = left(hard.get("reset")) or fmt_time(
+            usage.get("seconds_until_reset_5h") if session
+            else usage.get("seconds_until_reset"))
+        return (_t("avail.spent_all", label=label, time=t_left) if t_left
+                else _t("avail.spent_all_notime", label=label))
+    models = [b["scope"] for b in blocked if b["scope"]]
+    if not models:
+        return None
+    t_left = left(blocked[0].get("reset")) or fmt_time(usage.get("seconds_until_reset"))
+    return _t("avail.spent_scope", model=", ".join(models), time=t_left)
