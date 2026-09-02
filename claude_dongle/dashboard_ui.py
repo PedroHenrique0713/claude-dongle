@@ -2,8 +2,8 @@ import os, sys, time, threading, math
 if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
-from . import monitor, config, history, projects
-from .utils import (color, fmt_time, RED, GREEN, BG, BG2, BG3, FG, FG2, FG3, SEP,
+from . import monitor, config, history, projects, notifier
+from .utils import (color, fmt_time, RED, ORANGE, GREEN, BG, BG2, BG3, FG, FG2, FG3, SEP,
                    ACCENT, ACCENT2, SURFACE, SURFACE_HI, UI_FONT, UI_FONT_STACK)
 
 
@@ -17,17 +17,19 @@ def _fmt_tokens(n):
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QVBoxLayout,
                              QHBoxLayout, QFrame, QPushButton, QSizePolicy,
                              QSlider, QRadioButton, QButtonGroup, QLineEdit,
-                             QGraphicsOpacityEffect)
+                             QGraphicsOpacityEffect, QScrollArea)
 from PyQt6.QtCore import (Qt, QTimer, QRectF, QPointF, pyqtProperty,
                           QPropertyAnimation, QEasingCurve)
 from PyQt6.QtGui import (QPainter, QColor, QBrush, QFont, QFontMetrics, QPen,
-                         QPainterPath, QLinearGradient)
+                         QPainterPath, QLinearGradient, QIntValidator)
 
 REFRESH_MS = 5000
 TICK_MS = 1000          # live countdown (only recomputes time texts)
 WINDOW_5H = 5 * 3600    # window durations, for the pace bar
 WINDOW_7D = 7 * 86400
 SOURCE_LABELS = {"api": "official API", "none": "no data"}
+# Same file the dongle and the systemd timer write notification state to.
+SENT_PATH = config.CONFIG_DIR / "sent_thresholds.json"
 # animations only in real use; offscreen (screenshots/headless) paints the final state
 _ANIMATE = os.environ.get("QT_QPA_PLATFORM") != "offscreen"
 SHOW_MODES = [("Always visible", "always"),
@@ -99,6 +101,26 @@ def _qss():
         border-radius: 8px; font-size: 10px; padding: 0;
     }}
     QPushButton[kind="chipx"]:hover {{ color: white; background: {RED}; }}
+
+    QPushButton[kind="seg"] {{
+        background: {BG3}; color: {FG2}; border: 1px solid transparent;
+        border-radius: 9px; padding: 5px 11px; font-size: 11px; font-weight: 600;
+    }}
+    QPushButton[kind="seg"]:hover {{ background: {SURFACE_HI}; color: {FG}; }}
+    QPushButton[kind="seg"]:checked {{
+        background: {_rgba(ACCENT, 46)}; color: #cddaff; border-color: {_rgba(ACCENT, 120)};
+    }}
+
+    QScrollArea, #dashBody {{ background: {BG}; border: none; }}
+    QScrollBar:vertical {{
+        background: transparent; width: 9px; margin: 4px 2px 4px 0;
+    }}
+    QScrollBar::handle:vertical {{
+        background: {BG3}; border-radius: 4px; min-height: 40px;
+    }}
+    QScrollBar::handle:vertical:hover {{ background: #3d3d47; }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
 
     QSlider::groove:horizontal {{ height: 6px; background: {BG3}; border-radius: 3px; }}
     QSlider::sub-page:horizontal {{ background: {ACCENT}; border-radius: 3px; }}
@@ -503,6 +525,78 @@ class AvatarWidget(QWidget):
         p.end()
 
 
+class ToggleSwitch(QWidget):
+    """On/off switch. The settings panel only had radio buttons and bare text
+    fields, so every boolean option (alert me on X) had nowhere to live and
+    simply wasn't exposed — the notification switches were config-file only."""
+
+    W, H = 40, 22
+    PAD = 3
+
+    def __init__(self, checked=False, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(self.W, self.H)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._checked = bool(checked)
+        self._k = 1.0 if self._checked else 0.0
+        self._cb = None
+        self._anim = QPropertyAnimation(self, b"knob", self)
+        self._anim.setDuration(150)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def _get_knob(self):
+        return self._k
+
+    def _set_knob(self, v):
+        self._k = float(v)
+        self.update()
+
+    knob = pyqtProperty(float, _get_knob, _set_knob)
+
+    def isChecked(self):
+        return self._checked
+
+    def setChecked(self, v):
+        v = bool(v)
+        if v == self._checked:
+            return
+        self._checked = v
+        if _ANIMATE:
+            self._anim.stop()
+            self._anim.setStartValue(self._k)
+            self._anim.setEndValue(1.0 if v else 0.0)
+            self._anim.start()
+        else:
+            self._set_knob(1.0 if v else 0.0)
+
+    def onToggled(self, cb):
+        self._cb = cb
+        return self
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.setChecked(not self._checked)
+            if self._cb:
+                self._cb(self._checked)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        off, on = QColor(BG3), QColor(ACCENT)
+        k = self._k
+        track = QColor(int(off.red() + (on.red() - off.red()) * k),
+                       int(off.green() + (on.green() - off.green()) * k),
+                       int(off.blue() + (on.blue() - off.blue()) * k))
+        p.setBrush(track)
+        p.drawRoundedRect(QRectF(0, 0, self.W, self.H), self.H / 2, self.H / 2)
+        d = self.H - 2 * self.PAD
+        x = self.PAD + k * (self.W - d - 2 * self.PAD)
+        p.setBrush(QColor("#ffffff" if k > 0.5 else "#9a9aa4"))
+        p.drawEllipse(QRectF(x, self.PAD, d, d))
+        p.end()
+
+
 class DashboardWidget(QWidget):
     def __init__(self, cfg: dict, dongle=None):
         super().__init__()
@@ -526,7 +620,7 @@ class DashboardWidget(QWidget):
         self._tick_timer = QTimer(self)  # live countdown
         self._tick_timer.timeout.connect(self._tick)
         self._tick_timer.start(TICK_MS)
-        self.adjustSize()
+        self._fit_to_screen()
 
     # ---- construction -----------------------------------------------------
 
@@ -577,14 +671,38 @@ class DashboardWidget(QWidget):
         # The card→window cascade must be triggered by hand: with the disclosure
         # inside a QFrame, hiding/showing the container doesn't recompute the
         # card's sizeHint on its own (without relying on the event loop).
-        for c in (self.fc_container, self.pj_container):
+        for c in (self.fc_container, self.pj_container, self.set_container):
             pl = c.parentWidget().layout()
             if pl is not None:
                 pl.invalidate()
                 pl.activate()
         self.layout().invalidate()
         self.layout().activate()
-        self.adjustSize()
+        self._fit_to_screen()
+
+    def _fit_to_screen(self):
+        """Height follows the content, capped at the screen it is on.
+
+        setFixedWidth keeps the layout honest, but the height was free: on a
+        1366x768 laptop the settings card ended below the bottom edge and there
+        was no way to scroll to it. Past the cap the scroll area takes over.
+        """
+        body = self.scroll.widget()
+        if body is None:
+            return
+        wanted = body.sizeHint().height()
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            cap = int(screen.availableGeometry().height() * 0.92)
+            wanted = min(wanted, cap)
+            self.setMaximumHeight(cap)
+        self.resize(self.width(), max(wanted, 240))
+
+    def showEvent(self, event):
+        # The screen is only known once mapped: a panel opened on the external
+        # monitor may cap differently from the laptop one.
+        super().showEvent(event)
+        self._fit_to_screen()
 
     def _fade_widget(self, w):
         # section fade-in. The effect is applied AFTER _fit (which already
@@ -610,6 +728,19 @@ class DashboardWidget(QWidget):
         self._fit()  # window shrinks/expands with the content
         if self._fc_open and _ANIMATE:
             self._fade_widget(self.fc_container)
+
+    def _set_header_text(self):
+        return ("▾  " if self._set_open else "▸  ") + "SETTINGS"
+
+    def _toggle_settings(self):
+        self._set_open = not self._set_open
+        self.set_container.setVisible(self._set_open)
+        self.set_header.setText(self._set_header_text())
+        self.cfg["settings_expanded"] = self._set_open
+        config.save(self.cfg)
+        self._fit()
+        if self._set_open and _ANIMATE:
+            self._fade_widget(self.set_container)
 
     def _mini_label(self, text):
         l = QLabel(text)
@@ -664,7 +795,23 @@ class DashboardWidget(QWidget):
                 row.setVisible(False)
 
     def _build_ui(self):
-        main = QVBoxLayout(self)
+        # Everything lives inside a scroll area: with Forecast and By project
+        # open the content is taller than a 768px screen, and the panel used to
+        # simply run off the bottom with no way to reach the buttons.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        body = QWidget()
+        body.setObjectName("dashBody")
+        self.scroll.setWidget(body)
+        outer.addWidget(self.scroll)
+
+        main = QVBoxLayout(body)
         main.setContentsMargins(16, 16, 16, 16)
         main.setSpacing(13)
 
@@ -766,8 +913,20 @@ class DashboardWidget(QWidget):
             self._kick_projects()
             self._render_projects()
 
-        # ---- Settings (dongle + visibility + notifications) ----
-        scard, sbox = self._card(cm=(18, 16, 18, 18))
+        # ---- Settings (disclosure: dongle + visibility + notifications) ----
+        # Collapsed by default: settings are read rarely and, expanded, they
+        # alone are taller than the usage the panel exists to show.
+        self._set_open = bool(self.cfg.get("settings_expanded", False))
+        scard, scardbox = self._card(cm=(18, 14, 18, 16))
+        self.set_header = self._disclosure_btn(self._set_header_text(),
+                                               self._toggle_settings)
+        scardbox.addWidget(self.set_header)
+        self.set_container = QWidget()
+        sbox = QVBoxLayout(self.set_container)
+        sbox.setContentsMargins(0, 15, 0, 2)
+        sbox.setSpacing(0)
+        scardbox.addWidget(self.set_container)
+        self.set_container.setVisible(self._set_open)
 
         sbox.addWidget(self._card_title("Dongle"))
         sbox.addSpacing(13)
@@ -804,21 +963,7 @@ class DashboardWidget(QWidget):
 
         sbox.addSpacing(20)
         sbox.addWidget(self._card_title("Notifications"))
-        sbox.addSpacing(11)
-        self.thr_row = QHBoxLayout()
-        self.thr_row.setContentsMargins(0, 0, 0, 0)
-        self.thr_row.setSpacing(8)
-        sbox.addLayout(self.thr_row)
-        self._render_thresholds()
-        sbox.addSpacing(6)
-        add_row = QHBoxLayout()
-        add_row.setContentsMargins(0, 0, 0, 0)
-        add_btn = QPushButton("+ Add")
-        add_btn.setProperty("kind", "ghost")
-        add_btn.clicked.connect(self._add_thr)
-        add_row.addWidget(add_btn)
-        add_row.addStretch()
-        sbox.addLayout(add_row)
+        self._build_notifications(sbox)
         main.addWidget(scard)
 
         # ---- Actions ----
@@ -870,6 +1015,7 @@ class DashboardWidget(QWidget):
         # without redoing calc_usage/forecast/projects (those stay on the 5s cycle).
         if self._last_u is not None:
             self._render_usage_rows(self._last_u)
+        self._tick_snooze()
 
     def _render_usage_rows(self, u):
         now = time.time()
@@ -994,6 +1140,150 @@ class DashboardWidget(QWidget):
             self.cfg["show_mode"] = SHOW_MODES[idx][1]
             config.save(self.cfg)
 
+    # ---- notifications ----------------------------------------------------
+
+    NOTIF_SWITCHES = [
+        ("Threshold crossed", "notify_on_threshold", True),
+        ("Limit reached (100%)", "notify_on_limit", True),
+        ("Overflow forecast", "forecast_notify", True),
+        ("Data source lost", "notify_on_telemetry", True),
+    ]
+    COOLDOWNS = [("Off", 0), ("5m", 5), ("15m", 15), ("30m", 30), ("1h", 60)]
+    SNOOZES = [("30m", 30), ("2h", 120), ("Until reset", -1)]
+
+    def _hint(self, text):
+        l = QLabel(text)
+        l.setStyleSheet(f"color: {FG3}; font-size: 10px;")
+        l.setWordWrap(True)
+        return l
+
+    def _build_notifications(self, sbox):
+        sbox.addSpacing(12)
+        sbox.addWidget(self._hint("Alert me when a limit crosses"))
+        sbox.addSpacing(7)
+        self.thr_row = QHBoxLayout()
+        self.thr_row.setContentsMargins(0, 0, 0, 0)
+        self.thr_row.setSpacing(8)
+        sbox.addLayout(self.thr_row)
+        self._render_thresholds()
+
+        sbox.addSpacing(16)
+        self.notif_switches = {}
+        for i, (label, key, default) in enumerate(self.NOTIF_SWITCHES):
+            if i:
+                sbox.addSpacing(2)
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            lbl = QLabel(label)
+            lbl.setStyleSheet("font-size: 12px;")
+            row.addWidget(lbl)
+            row.addStretch()
+            sw = ToggleSwitch(self.cfg.get(key, default))
+            sw.onToggled(lambda v, k=key: self._on_notify_switch(k, v))
+            self.notif_switches[key] = sw
+            row.addWidget(sw)
+            sbox.addLayout(row)
+
+        sbox.addSpacing(16)
+        sbox.addWidget(self._hint("Minimum gap between routine alerts — "
+                                  "a limit reached always goes through"))
+        sbox.addSpacing(7)
+        cool = QHBoxLayout()
+        cool.setContentsMargins(0, 0, 0, 0)
+        cool.setSpacing(6)
+        self.cool_group = QButtonGroup(self)
+        self.cool_group.setExclusive(True)
+        current = int(self.cfg.get("notify_cooldown_minutes", 15))
+        for label, minutes in self.COOLDOWNS:
+            b = QPushButton(label)
+            b.setProperty("kind", "seg")
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setChecked(minutes == current)
+            b.clicked.connect(lambda _c=False, m=minutes: self._on_cooldown(m))
+            self.cool_group.addButton(b)
+            cool.addWidget(b)
+        cool.addStretch()
+        sbox.addLayout(cool)
+
+        sbox.addSpacing(16)
+        self.snooze_row = QHBoxLayout()
+        self.snooze_row.setContentsMargins(0, 0, 0, 0)
+        self.snooze_row.setSpacing(6)
+        sbox.addLayout(self.snooze_row)
+        self.snooze_lbl = None
+        self._render_snooze()
+
+    def _on_notify_switch(self, key, value):
+        self.cfg[key] = bool(value)
+        config.save(self.cfg)
+
+    def _on_cooldown(self, minutes):
+        self.cfg["notify_cooldown_minutes"] = int(minutes)
+        config.save(self.cfg)
+
+    def _snooze_seconds_until_reset(self):
+        u = self._last_u or {}
+        secs = [s for s in (u.get("seconds_until_reset_5h"),
+                            u.get("seconds_until_reset")) if s]
+        return max(secs) if secs else 3600
+
+    def _on_snooze(self, minutes):
+        if minutes < 0:  # "until reset": silence through the longest open window
+            minutes = max(1, int(self._snooze_seconds_until_reset() / 60))
+        notifier.mute(str(SENT_PATH), minutes)
+        self._render_snooze()
+
+    def _on_resume(self):
+        notifier.mute(str(SENT_PATH), 0)
+        self._render_snooze()
+
+    def _render_snooze(self):
+        while self.snooze_row.count():
+            it = self.snooze_row.takeAt(0)
+            w = it.widget()
+            if w:
+                w.deleteLater()
+        until = notifier.muted_until(str(SENT_PATH))
+        if until:
+            self.snooze_lbl = QLabel()
+            self.snooze_lbl.setStyleSheet(
+                f"color: {ORANGE}; font-size: 11px; font-weight: 600;")
+            self._tick_snooze(until)
+            self.snooze_row.addWidget(self.snooze_lbl)
+            self.snooze_row.addStretch()
+            b = QPushButton("Resume")
+            b.setProperty("kind", "ghost")
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(self._on_resume)
+            self.snooze_row.addWidget(b)
+            return
+        self.snooze_lbl = None
+        lbl = QLabel("Snooze all")
+        lbl.setStyleSheet(f"color: {FG2}; font-size: 11px;")
+        self.snooze_row.addWidget(lbl)
+        for label, minutes in self.SNOOZES:
+            b = QPushButton(label)
+            b.setProperty("kind", "seg")
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _c=False, m=minutes: self._on_snooze(m))
+            self.snooze_row.addWidget(b)
+        self.snooze_row.addStretch()
+
+    def _tick_snooze(self, until=None):
+        """Live countdown on the snooze label, and it drops back to the buttons
+        the moment the mute expires (the notifier already ignores an expired
+        one — this only keeps the panel from lying about it)."""
+        lbl = getattr(self, "snooze_lbl", None)
+        if lbl is None:
+            return
+        if until is None:
+            until = notifier.muted_until(str(SENT_PATH))
+        if not until:
+            self._render_snooze()
+            return
+        lbl.setText(f"Muted · {fmt_time(int(until - time.time()))} left")
+
     def _render_thresholds(self):
         while self.thr_row.count():
             it = self.thr_row.takeAt(0)
@@ -1008,9 +1298,13 @@ class DashboardWidget(QWidget):
             lay.setSpacing(2)
             e = QLineEdit(str(t))
             e.setProperty("bare", "true")
+            e.setValidator(QIntValidator(1, 99, e))
             e.setFixedWidth(24)
             e.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            e.textChanged.connect(lambda txt, idx=i: self._upd_thr(idx, txt))
+            # Committed on Enter/focus-out, NEVER on every keystroke: saving
+            # per keystroke turned typing "85" into a threshold of 8, and the
+            # next poll dutifully alerted at 8%.
+            e.editingFinished.connect(lambda w=e, idx=i: self._commit_thr(idx, w))
             lay.addWidget(e)
             pc = QLabel("%")
             pc.setStyleSheet(f"color: {FG3}; font-size: 11px; font-weight: 600;")
@@ -1023,22 +1317,47 @@ class DashboardWidget(QWidget):
             rm.clicked.connect(lambda checked=False, idx=i: self._del_thr(idx))
             lay.addWidget(rm)
             self.thr_row.addWidget(chip)
+        add_btn = QPushButton("+")
+        add_btn.setProperty("kind", "seg")
+        add_btn.setFixedWidth(30)
+        add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        add_btn.clicked.connect(self._add_thr)
+        self.thr_row.addWidget(add_btn)
         self.thr_row.addStretch()
 
+    def _next_threshold(self):
+        used = set(self.cfg.get("thresholds", []))
+        for candidate in (50, 70, 85, 95, 60, 75, 90, 40, 30, 25):
+            if candidate not in used:
+                return candidate
+        return 50
+
     def _add_thr(self):
-        self.cfg.setdefault("thresholds", []).append(50)
-        self._render_thresholds()
-        config.save(self.cfg)
+        self.cfg.setdefault("thresholds", []).append(self._next_threshold())
+        self._normalize_thresholds()
 
     def _del_thr(self, i):
         if len(self.cfg.get("thresholds", [])) > 1:
             self.cfg["thresholds"].pop(i)
-            self._render_thresholds()
-            config.save(self.cfg)
+            self._normalize_thresholds()
 
-    def _upd_thr(self, i, txt):
+    def _commit_thr(self, i, widget):
         try:
-            self.cfg["thresholds"][i] = int(txt)
-            config.save(self.cfg)
-        except (ValueError, IndexError):
-            pass
+            value = int(widget.text())
+        except ValueError:
+            self._normalize_thresholds()
+            return
+        try:
+            self.cfg["thresholds"][i] = value
+        except IndexError:
+            return
+        self._normalize_thresholds()
+
+    def _normalize_thresholds(self):
+        """Sorted, unique and in range: a duplicate alerts twice for the same
+        crossing and a 0 alerts on every reading of an empty window."""
+        thr = sorted({max(1, min(99, int(t)))
+                      for t in self.cfg.get("thresholds", [])})
+        self.cfg["thresholds"] = thr or [50]
+        config.save(self.cfg)
+        self._render_thresholds()
