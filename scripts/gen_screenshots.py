@@ -28,16 +28,6 @@ OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else REPO / "docs"
 FAKE_ACCOUNT = "Alex Doe"
 FAKE_EMAIL = "alex@example.com"
 FAKE_PLAN = "max"
-FAKE_PROJECTS = [
-    {"name": "my-app",             "output": 16_500_000, "total": 132_000_000},
-    {"name": "api-backend",        "output":  4_000_000, "total":  32_000_000},
-    {"name": "company-site",       "output":    623_000, "total":   5_000_000},
-    {"name": "scripts",            "output":    491_000, "total":   3_900_000},
-    {"name": "landing-page",       "output":    358_000, "total":   2_800_000},
-    {"name": "notes",              "output":    332_000, "total":   2_600_000},
-    {"name": "cli-tool",           "output":    300_000, "total":   2_400_000},
-    {"name": "prototype",          "output":    187_000, "total":   1_500_000},
-]
 FAKE_MODELS = [
     {"name": "claude-opus-4-8",  "output": 16_100_000, "total": 128_000_000},
     {"name": "claude-fable-5",   "output":  7_000_000, "total":  56_000_000},
@@ -92,8 +82,7 @@ notifier.check_thresholds = lambda *a, **k: False
 notifier.check_telemetry = lambda *a, **k: False
 monitor.calc_usage = lambda cfg: dict(FAKE_U)
 projects.refresh = lambda *a, **k: 0
-projects.summary = lambda days=7, limit=8: {
-    "projects": FAKE_PROJECTS, "models": FAKE_MODELS, "days": days}
+projects.summary = lambda days=7, limit=8: {"models": FAKE_MODELS, "days": days}
 projects.daily = lambda days=14: [
     (f"2026-06-{20 + i:02d}", HEAT[i] * 120_000) for i in range(14)]
 history.record = lambda *a, **k: None

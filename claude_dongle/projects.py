@@ -1,16 +1,21 @@
-"""Per-project/model usage from the JSONL files in ~/.claude/projects.
+"""Per-model usage from the JSONL files in ~/.claude/projects.
 
-The OAuth usage API gives the official % but doesn't say WHICH project/model
-burned the week. The session JSONLs have `message.usage` per assistant
-response, with `model` and `cwd` — complementary local data (raw tokens, not
-the weighted %).
+The OAuth usage API gives the official % but doesn't say WHICH model burned
+the week. The session JSONLs have `message.usage` per assistant response, with
+the model — complementary local data (raw tokens, not the weighted %).
+
+Deliberately NOT per project. Attributing by the session's `cwd` is wrong
+often enough to mislead (edits routinely land in repos that aren't the working
+directory — worktrees, monorepos, a terminal opened elsewhere), and doing it
+properly means following the edited file to the commit that closed it, which
+is a different tool's job. This one stays about limits.
 
 Incremental parser by byte offset (append-only): each refresh reads only what
 grew since the last pass, so the marginal cost is ~zero. If a file shrinks
 (rotation/rewrite, rare), do a full rebuild — the only correct way to avoid
 double counting.
 """
-import json, os, threading
+import json, threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -22,21 +27,22 @@ _lock = threading.Lock()  # serializes refreshes: two in parallel would recount
 
 def _ensure_schema(c):
     c.execute(
-        "CREATE TABLE IF NOT EXISTS usage_by_project ("
-        " project TEXT NOT NULL, model TEXT NOT NULL, day TEXT NOT NULL,"
+        "CREATE TABLE IF NOT EXISTS usage_by_model ("
+        " model TEXT NOT NULL, day TEXT NOT NULL,"
         " input INTEGER NOT NULL DEFAULT 0, output INTEGER NOT NULL DEFAULT 0,"
         " cache_read INTEGER NOT NULL DEFAULT 0,"
         " cache_creation INTEGER NOT NULL DEFAULT 0,"
-        " PRIMARY KEY (project, model, day)) WITHOUT ROWID")
+        " PRIMARY KEY (model, day)) WITHOUT ROWID")
+    # The per-project table and the offsets that filled it are dropped: the
+    # rows were keyed by cwd, which is the attribution this module no longer
+    # makes, and keeping them would leave a stale answer in the file.
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table'"
+                 " AND name='usage_by_project'").fetchone():
+        c.execute("DROP TABLE usage_by_project")
+        c.execute("DELETE FROM jsonl_state")
     c.execute(
         "CREATE TABLE IF NOT EXISTS jsonl_state ("
         " path TEXT PRIMARY KEY, offset INTEGER NOT NULL) WITHOUT ROWID")
-
-
-def _project_name(cwd):
-    if not cwd:
-        return "?"
-    return os.path.basename(cwd.rstrip("/")) or cwd
 
 
 def _agg_line(raw, agg):
@@ -56,8 +62,7 @@ def _agg_line(raw, agg):
     day = (o.get("timestamp") or "")[:10]  # YYYY-MM-DD
     if len(day) != 10:
         return
-    key = (_project_name(o.get("cwd")), model, day)
-    a = agg.setdefault(key, [0, 0, 0, 0])
+    a = agg.setdefault((model, day), [0, 0, 0, 0])
     a[0] += u.get("input_tokens") or 0
     a[1] += u.get("output_tokens") or 0
     a[2] += u.get("cache_read_input_tokens") or 0
@@ -84,7 +89,7 @@ def refresh(full=False):
                 except OSError:
                     pass
         if full:
-            c.execute("DELETE FROM usage_by_project")
+            c.execute("DELETE FROM usage_by_model")
             c.execute("DELETE FROM jsonl_state")
             c.commit()
             offsets = {}
@@ -109,14 +114,14 @@ def refresh(full=False):
                 continue
             new_offsets[path] = size
 
-        for (proj, model, day), a in agg.items():
+        for (model, day), a in agg.items():
             c.execute(
-                "INSERT INTO usage_by_project VALUES (?,?,?,?,?,?,?) "
-                "ON CONFLICT(project,model,day) DO UPDATE SET "
+                "INSERT INTO usage_by_model VALUES (?,?,?,?,?,?) "
+                "ON CONFLICT(model,day) DO UPDATE SET "
                 "input=input+excluded.input, output=output+excluded.output, "
                 "cache_read=cache_read+excluded.cache_read, "
                 "cache_creation=cache_creation+excluded.cache_creation",
-                (proj, model, day, a[0], a[1], a[2], a[3]))
+                (model, day, a[0], a[1], a[2], a[3]))
         for path, off in new_offsets.items():
             c.execute("INSERT INTO jsonl_state VALUES (?,?) "
                       "ON CONFLICT(path) DO UPDATE SET offset=excluded.offset",
@@ -131,13 +136,12 @@ def refresh(full=False):
         _lock.release()
 
 
-def _top(c, group_col, cutoff, limit):
+def _top_models(c, cutoff, limit):
     rows = c.execute(
-        f"SELECT {group_col},"
-        " SUM(output) AS out,"
+        "SELECT model, SUM(output) AS out,"
         " SUM(input+output+cache_read+cache_creation) AS total"
-        " FROM usage_by_project WHERE day >= ?"
-        f" GROUP BY {group_col} ORDER BY out DESC LIMIT ?",
+        " FROM usage_by_model WHERE day >= ?"
+        " GROUP BY model ORDER BY out DESC LIMIT ?",
         (cutoff, limit)).fetchall()
     return [{"name": r[0], "output": r[1] or 0, "total": r[2] or 0} for r in rows]
 
@@ -152,7 +156,7 @@ def daily(days=14):
         wanted = [(today - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
                   for i in range(days)]
         rows = dict(c.execute(
-            "SELECT day, SUM(output) FROM usage_by_project WHERE day >= ?"
+            "SELECT day, SUM(output) FROM usage_by_model WHERE day >= ?"
             " GROUP BY day", (wanted[0],)).fetchall())
         return [(d, rows.get(d, 0) or 0) for d in wanted]
     except Exception as e:
@@ -161,17 +165,13 @@ def daily(days=14):
 
 
 def summary(days=7, limit=8):
-    """Top projects and models of the last `days` days, ordered by output
-    tokens (output = generated work, the least inflated proxy vs cache_read)."""
+    """Top models of the last `days` days, ordered by output tokens (output =
+    generated work, the least inflated proxy vs cache_read)."""
     try:
         c = history._conn()
         _ensure_schema(c)
         cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-        return {
-            "projects": _top(c, "project", cutoff, limit),
-            "models": _top(c, "model", cutoff, limit),
-            "days": days,
-        }
+        return {"models": _top_models(c, cutoff, limit), "days": days}
     except Exception as e:
         print(f"projects.summary: {e}", flush=True)
-        return {"projects": [], "models": [], "days": days}
+        return {"models": [], "days": days}

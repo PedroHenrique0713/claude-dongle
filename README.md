@@ -42,8 +42,10 @@ login, nothing sent anywhere.
 - **Pace marker** — every ring has a tick for *where you'd be at a linear pace*.
   Fill ahead of the tick = burning fast; behind it = comfortable. You read your
   pace at a glance, no math.
-- **Per-project & per-model usage** — from Claude Code's local logs, it shows
-  which projects and models ate your week (with a 14-day heatmap).
+- **Per-model usage** — from Claude Code's local logs, it shows which models
+  ate your week (with a 14-day heatmap). Not per project: attributing by the
+  session's working directory is wrong often enough to mislead, and doing it
+  right is a different tool's job.
 - **What's still usable** — a model running out of its weekly quota doesn't
   stop the others, so the panel says exactly that, and when it comes back.
 - **Budget, not just a threat** — the forecast answers "can I take one more
@@ -75,7 +77,7 @@ login, nothing sent anywhere.
   </tr>
   <tr>
     <td align="center"><em>Dashboard</em></td>
-    <td align="center"><em>Forecast, per-project usage and settings, expanded</em></td>
+    <td align="center"><em>Forecast, per-model usage and settings, expanded</em></td>
   </tr>
 </table>
 
