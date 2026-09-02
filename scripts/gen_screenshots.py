@@ -125,20 +125,27 @@ def _cfg(**over):
 
 
 def gen_app_shots():
-    # dongle (opaque RGB 216x36, like the original; corner = gradient bottom color)
+    # dongle (opaque RGB 216x36; the corners get the same pure black as the body)
     d = DongleWidget(_cfg(show_mode="always"))   # always: doesn't hide during the grab
     d._overflow = False                          # clean border, no amber pulse
     d._critical = False
     d.update(); app.processEvents()
     pm = QPixmap(DONGLE_W, DONGLE_H)
-    pm.fill(QColor("#18181b"))
+    pm.fill(QColor("#000000"))
     d.render(pm)
     pm.save(str(OUT / "dongle.png"))
 
-    for name, over in (("dashboard", dict(forecast_expanded=False, projects_expanded=False)),
-                       ("dashboard-full", dict(forecast_expanded=True, projects_expanded=True))):
+    for name, over in (("dashboard", dict(forecast_expanded=False, projects_expanded=False,
+                                          settings_expanded=False)),
+                       ("dashboard-full", dict(forecast_expanded=True, projects_expanded=True,
+                                               settings_expanded=True))):
         w = DashboardWidget(_cfg(**over))
-        w.show(); app.processEvents(); w.adjustSize(); app.processEvents()
+        w.show(); app.processEvents()
+        # On a real screen the panel is capped and scrolls; a screenshot must
+        # still show the whole thing, so lift the cap just for the grab.
+        w.setMaximumHeight(16777215)
+        w.resize(w.width(), w.scroll.widget().sizeHint().height())
+        app.processEvents()
         w.grab().save(str(OUT / f"{name}.png"))
         w.close(); app.processEvents()
     print("app shots:", "dongle dashboard dashboard-full")
