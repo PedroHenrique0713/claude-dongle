@@ -132,6 +132,9 @@ def calc_usage(state: dict) -> dict:
         weekly_breakdown = api_data.get("weekly_breakdown")
         stale_age = api_data.get("age_seconds")
         overage = "enabled" if api_data.get("overage_enabled") else None
+        locked = api_data.get("locked")
+        extra = api_data.get("extra")
+        active_limit = api_data.get("active_limit")
         data_ts = api_data.get("fetched_at")
     else:
         # No real source (API unavailable, no cache): show "--".
@@ -139,6 +142,9 @@ def calc_usage(state: dict) -> dict:
         pct_7d = None
         pct_5h = None
         overage = None
+        locked = None
+        extra = None
+        active_limit = None
         stale_age = None
         source = "none"
 
@@ -174,6 +180,12 @@ def calc_usage(state: dict) -> dict:
         result["stale_age_seconds"] = stale_age
     if overage:
         result["overage_status"] = overage
+    if locked:
+        result["locked"] = locked
+    if extra:
+        result["extra"] = extra
+    if active_limit:
+        result["active_limit"] = active_limit
     # History/forecast must never take down the usage pipeline.
     try:
         history.record(result)

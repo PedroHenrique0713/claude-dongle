@@ -137,10 +137,30 @@ def _read_token():
 
 
 def _parse_iso(ts):
+    """Epoch of an API timestamp, ROUNDED TO THE MINUTE.
+
+    resets_at carries sub-second jitter around the whole minute
+    (…T21:00:00.314 on one response, …T20:59:59.87 on the next). Truncating
+    with int() made the same reset alternate between X and X-1, and that epoch
+    is the identity of a window: it keys the notification dedup (the "100%"
+    alert fired again on every flip) and the history's window_epoch (one
+    series split into two). Resets land on whole minutes, so rounding there
+    absorbs the jitter."""
     try:
-        return int(datetime.fromisoformat(ts).timestamp())
+        return int(round(datetime.fromisoformat(ts).timestamp() / 60) * 60)
     except (ValueError, TypeError):
         return None
+
+
+# Weekly windows the API also exposes as top-level keys. Most accounts get
+# their per-model breakdown through limits[]; these are the fallback for the
+# ones that only get the flat keys. Value = the name we show.
+TOP_LEVEL_WEEKLY = {
+    "seven_day_opus": "Opus",
+    "seven_day_sonnet": "Sonnet",
+    "seven_day_cowork": "Cowork",
+    "seven_day_oauth_apps": "OAuth apps",
+}
 
 
 def _normalize(body):
@@ -152,6 +172,13 @@ def _normalize(body):
     out["reset_5h"] = _parse_iso(fh.get("resets_at"))
     out["reset_7d"] = _parse_iso(sd.get("resets_at"))
 
+    # locked_reason is the API saying this window is closed for good reasons of
+    # its own (not merely 100% burned) — surface the reason instead of guessing.
+    locked = []
+    for label, win in (("5h session", fh), ("Week", sd)):
+        if win.get("locked_reason"):
+            locked.append({"label": label, "reason": win["locked_reason"]})
+
     # limits[] is richer: session + weekly_all + weekly_scoped (per-model).
     # For warning purposes the effective weekly pct is whichever bites first.
     weekly = []
@@ -159,28 +186,69 @@ def _normalize(body):
         pct = lim.get("percent")
         if pct is None:
             continue
+        scope = lim.get("scope") or {}
+        model = (scope.get("model") or {}).get("display_name")
+        active = bool(lim.get("is_active"))
         if lim.get("kind") == "session":
             out["pct_5h"] = float(pct)
             out["reset_5h"] = _parse_iso(lim.get("resets_at")) or out["reset_5h"]
+            if active:
+                out["active_limit"] = "5h"
         elif lim.get("group") == "weekly":
-            scope = lim.get("scope") or {}
-            model = (scope.get("model") or {}).get("display_name")
             weekly.append({
                 "pct": float(pct),
                 "kind": lim.get("kind"),
                 "model": model,
                 "reset": _parse_iso(lim.get("resets_at")),
                 "severity": lim.get("severity"),
+                "active": active,
             })
+            if active:
+                out["active_limit"] = f"7d:{model}" if model else "7d"
+        if lim.get("locked_reason"):
+            locked.append({"label": model or lim.get("kind") or "limit",
+                           "reason": lim["locked_reason"]})
+
+    # Fallback for accounts whose per-model weeks only come as top-level keys.
+    known = {w["model"] for w in weekly if w["model"]}
+    for key, name in TOP_LEVEL_WEEKLY.items():
+        win = body.get(key)
+        if not isinstance(win, dict) or win.get("utilization") is None:
+            continue
+        if name in known:
+            continue
+        weekly.append({
+            "pct": float(win["utilization"]),
+            "kind": "weekly_scoped",
+            "model": name,
+            "reset": _parse_iso(win.get("resets_at")) or out["reset_7d"],
+            "severity": None,
+            "active": False,
+        })
+        if win.get("locked_reason"):
+            locked.append({"label": name, "reason": win["locked_reason"]})
+
     if weekly:
         top = max(weekly, key=lambda w: w["pct"])
         out["pct_7d"] = top["pct"]
         out["reset_7d"] = top["reset"] or out["reset_7d"]
         out["pct_7d_scope"] = top["model"] or "all"
         out["weekly_breakdown"] = weekly
+    if locked:
+        out["locked"] = locked
 
+    # Extra usage = the paid overflow pool. We keep the PERCENTAGE and the
+    # flags, never the amount: this monitor reports limits, not money spent
+    # (a subscription is a flat fee — a "$ burned" number would be fiction).
     extra = body.get("extra_usage") or {}
     out["overage_enabled"] = bool(extra.get("is_enabled"))
+    if extra.get("is_enabled") or extra.get("utilization") is not None:
+        out["extra"] = {
+            "enabled": bool(extra.get("is_enabled")),
+            "pct": extra.get("utilization"),
+            "limit_reached": bool(extra.get("spend_limit_reached")),
+            "disabled_reason": extra.get("disabled_reason"),
+        }
     return out
 
 

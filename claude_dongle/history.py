@@ -42,9 +42,31 @@ def _conn() -> sqlite3.Connection:
         " PRIMARY KEY (metric, window_epoch, ts)"
         ") WITHOUT ROWID")
     c.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_ts ON snapshots(ts)")
+    _migrate(c)
     c.commit()
     _local.conn = c
     return c
+
+
+def _migrate(c: sqlite3.Connection):
+    """One-off repairs, tracked by PRAGMA user_version.
+
+    v1: resets_at carries sub-second jitter and used to be truncated, so the
+    same window landed under two epochs (X and X-1) and every series was cut
+    in half — halving the points the burn-rate regression could use. Collapse
+    them onto the whole minute, the way _parse_iso now does.
+    """
+    version = c.execute("PRAGMA user_version").fetchone()[0]
+    # Also repairs rows an older process wrote after the migration ran (during
+    # an upgrade both versions are alive for a while), so the fix isn't a
+    # one-shot that a stale process can outlive.
+    stray = c.execute("SELECT 1 FROM snapshots WHERE window_epoch % 60 != 0"
+                      " LIMIT 1").fetchone()
+    if version < 1 or stray:
+        c.execute("UPDATE OR REPLACE snapshots"
+                  " SET window_epoch = CAST(ROUND(window_epoch / 60.0) * 60 AS INTEGER)"
+                  " WHERE window_epoch % 60 != 0")
+        c.execute("PRAGMA user_version = 1")
 
 
 def _metrics_from(usage: dict) -> list:
