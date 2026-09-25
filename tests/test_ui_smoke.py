@@ -43,7 +43,8 @@ def _no_side_effects(monkeypatch):
                         lambda **k: {"models": [{"name": "claude-opus-5",
                                                  "output": 10, "total": 20}],
                                      "days": 7})
-    monkeypatch.setattr(projects, "daily", lambda days=14: [("2026-09-01", 5)] * days)
+    monkeypatch.setattr(projects, "daily",
+                        lambda days=14, **k: [("2026-09-01", 5)] * days)
     monkeypatch.setattr(monitor, "calc_usage", lambda cfg: _usage())
     yield
     i18n.set_language("en")
@@ -126,4 +127,58 @@ def test_nothing_is_spent_hides_the_availability_line(app, monkeypatch):
     w.show()
     app.processEvents()
     assert not w.avail.isVisible()
+    w.close()
+
+
+def _codex(pct_5h=49.0, week=27.0):
+    return {"pct_5h": pct_5h, "pct_7d": week, "reset_5h_epoch": NOW + 3000,
+            "reset_7d_epoch": NOW + 500_000, "plan": "plus", "age_seconds": 60,
+            "window_5h_min": 300, "window_7d_min": 10080}
+
+
+def test_split_dongle_keeps_the_size_and_reports_both(app, monkeypatch):
+    from claude_dongle import codex
+    from claude_dongle.dongle import DongleWidget, DONGLE_W, DONGLE_H
+    monkeypatch.setattr(codex, "read", lambda d: _codex())
+    d = DongleWidget(_cfg(show_mode="always", sources="both"))
+    assert (d.width(), d.height()) == (DONGLE_W, DONGLE_H)
+    tip = d.toolTip()
+    assert "Claude" in tip and "Codex · Plus" in tip and "Week: 27%" in tip
+    assert d._countdown_secs() is None  # no room for one: it's in the tooltip
+    assert d._critical is False
+    d.grab()  # paints without raising
+    # Codex out of session budget stops the Codex work: the border says so
+    monkeypatch.setattr(codex, "read", lambda d: _codex(pct_5h=100.0))
+    d.poll()
+    assert d._critical is True
+    d.close()
+
+
+def test_codex_only_never_touches_the_claude_api(app, monkeypatch):
+    from claude_dongle import codex
+    from claude_dongle.dongle import DongleWidget
+    monkeypatch.setattr(codex, "read", lambda d: _codex())
+
+    def boom(cfg):
+        raise AssertionError("Claude polled in codex-only mode")
+    monkeypatch.setattr(monitor, "calc_usage", boom)
+    d = DongleWidget(_cfg(show_mode="always", sources="codex"))
+    assert "Codex · Plus" in d.toolTip() and "Claude ·" not in d.toolTip()
+    assert d._countdown_secs() is not None  # single source: countdown is back
+    d.grab()
+    d.close()
+
+
+def test_dashboard_codex_card_follows_the_source(app, monkeypatch):
+    from claude_dongle import codex
+    from claude_dongle.dashboard_ui import DashboardWidget
+    monkeypatch.setattr(codex, "read", lambda d: _codex())
+    w = DashboardWidget(_cfg())
+    w.show()
+    app.processEvents()
+    assert not w.cx_card.isVisible()
+    w._on_sources("both")
+    app.processEvents()
+    assert w.cx_card.isVisible()
+    assert w.cx_5h._target_pct == 49.0 and w.cx_7d._target_pct == 27.0
     w.close()

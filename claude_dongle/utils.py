@@ -43,6 +43,41 @@ def color(pct: float) -> str:
     return GREEN
 
 
+# Dongle tones: every metric keeps its own hue, so the numbers read without
+# labels (and Claude next to Codex reads at a glance), and each one deepens as
+# its limit fills. Claude is orange (session, week, per-model week), Codex is
+# purple (session, week). Value = the fully spent colour.
+TONES = {
+    "claude.5h": "#ff8c42",     # orange
+    "claude.week": "#ffc15e",   # amber
+    "claude.model": "#e8603c",  # terracotta
+    "codex.5h": "#9d8cff",      # lavender violet
+    "codex.week": "#d17bf0",    # orchid
+}
+# floor colour and how much of the tone it already carries at 0%. Numbers sit
+# near their full tone from the start: a quiet 28% next to a loud 78% read as
+# two font sizes. The bars carry the build-up.
+_TONE_FLOOR = {"bar": ("#3a3a42", 0.35), "text": (FG2, 0.8)}
+
+
+def mix(a: str, b: str, t: float) -> str:
+    """a→b in sRGB, t in [0, 1]."""
+    ca = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+    cb = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * t):02x}" for x, y in zip(ca, cb))
+
+
+def tone(key: str, pct, part: str = "bar") -> str:
+    """Colour of one metric at pct. A bar sits close to a muted floor at low
+    usage and saturates towards the full tone as the limit nears — calm most
+    of the day, loud near the ceiling. Text barely moves (see _TONE_FLOOR)."""
+    if pct is None:
+        return FG3
+    t = max(0.0, min(float(pct), 100.0)) / 100
+    floor, base = _TONE_FLOOR[part]
+    return mix(floor, TONES[key], base + (1 - base) * t ** 1.4)
+
+
 def fmt_time(seconds):
     if seconds is None:
         return "--"

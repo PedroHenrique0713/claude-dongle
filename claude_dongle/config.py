@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -29,7 +30,12 @@ DEFAULTS = {
     # Minimum gap between two routine notifications (critical ones ignore it).
     "notify_cooldown_minutes": 15,
     "telemetry_stale_minutes": 60,  # no fresh data for X min → warn once
+    # Which Claude Code account the dongle watches: its config dir (~/.claude,
+    # or the CLAUDE_CONFIG_DIR of another account, e.g. ~/.claude-work).
     "claude_dir": str(Path.home() / ".claude"),
+    # What the dongle shows: "claude", "codex" or "both" (split in half).
+    "sources": "claude",
+    "codex_dir": os.environ.get("CODEX_HOME") or str(Path.home() / ".codex"),
     "dongle_opacity": 0.85,
     "dongle_always_on_top": True,
     "dongle_pos": None,  # [x, y] of the last dragged position (null = default corner)
@@ -58,17 +64,59 @@ def _migrate_legacy():
         pass
 
 
+# Keys another process may change under a running dongle (the CLI's
+# `use` / `source`): the dongle re-reads just these when the file changes.
+LIVE_KEYS = ("claude_dir", "sources")
+_seen_mtime = None
+
+
+def _mtime():
+    try:
+        return CONFIG_PATH.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
 def load():
+    global _seen_mtime
     _migrate_legacy()
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     if CONFIG_PATH.exists():
         merged = DEFAULTS.copy()
         merged.update(json.loads(CONFIG_PATH.read_text()))
+        _seen_mtime = _mtime()
         return merged
     save(DEFAULTS)
     return DEFAULTS.copy()
 
 
 def save(cfg):
+    global _seen_mtime
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+    _seen_mtime = _mtime()
+
+
+def sync_live(cfg) -> bool:
+    """Pull LIVE_KEYS from disk into cfg when another process rewrote the
+    file. True when something changed."""
+    global _seen_mtime
+    m = _mtime()
+    if _seen_mtime is None:
+        # cfg did not come from this file (tests, `config` built by hand):
+        # watch from here on instead of overwriting it with the disk
+        _seen_mtime = m
+        return False
+    if m is None or m == _seen_mtime:
+        return False
+    _seen_mtime = m
+    try:
+        disk = json.loads(CONFIG_PATH.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    changed = False
+    for k in LIVE_KEYS:
+        if k in disk and disk[k] != cfg.get(k):
+            cfg[k] = disk[k]
+            changed = True
+    return changed
