@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Several Claude accounts.** Pick which Claude Code config dir the dongle
+  watches (`~/.claude`, `~/.claude-work`, …) from the panel or with
+  `claude-dongle use NAME`; `claude-dongle accounts` lists them. The usage
+  cache, the 429 backoff, the notification state and the per-model history are
+  kept per account — sharing them made a switch read as a reset.
+- **Codex.** The Codex CLI's 5h and weekly limits, read from its session logs
+  (no network, no token). `claude-dongle source claude|codex|both`; in `both`
+  the dongle splits its 216px by the number of limits, so Claude's three
+  columns get more room than Codex's two.
+- **Tones.** Claude's limits in three oranges, Codex's in two purples, each one
+  deepening as its limit fills; small brand marks tell the sources apart.
+
+### Fixed
+
+- The default account's identity was read from `~/.claude/.claude.json`, a
+  location Claude Code stopped updating; the newest of it and `~/.claude.json`
+  wins now.
+- A clipped countdown ("1h'") when the per-model week crowded the row: it is
+  drawn whole or not at all, and the "5h" label yields first.
+
 ## 1.1.0 — 2026-09-02
 
 ### Fixed

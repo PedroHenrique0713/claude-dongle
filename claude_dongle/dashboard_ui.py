@@ -2,9 +2,9 @@ import os, sys, time, threading, math
 if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
-from . import monitor, config, history, projects, notifier, i18n
+from . import accounts, codex, monitor, config, history, projects, notifier, i18n
 from .i18n import t as _t
-from .utils import (color, fmt_time, availability_text, on_battery,
+from .utils import (color, tone, fmt_time, availability_text, on_battery,
                    RED, ORANGE, GREEN, BG, BG2, BG3, FG, FG2, FG3, SEP,
                    ACCENT, ACCENT2, SURFACE, SURFACE_HI, UI_FONT, UI_FONT_STACK)
 
@@ -33,7 +33,8 @@ WINDOW_7D = 7 * 86400
 def _source_label(src):
     return {"api": _t("src.api"), "none": _t("src.none")}.get(src, src or "?")
 # Same file the dongle and the systemd timer write notification state to.
-SENT_PATH = config.CONFIG_DIR / "sent_thresholds.json"
+SHOW_SOURCES = [("show.claude", "claude"), ("show.codex", "codex"),
+                ("show.both", "both")]
 # animations only in real use; offscreen (screenshots/headless) paints the final state
 _ANIMATE = os.environ.get("QT_QPA_PLATFORM") != "offscreen"
 SHOW_MODES = [("vis.always", "always"), ("vis.claude", "claude"),
@@ -193,9 +194,10 @@ class UsageRing(QWidget):
     DIAM = 84
     TH = 8
 
-    def __init__(self, label, parent=None):
+    def __init__(self, label, tone_key=None, parent=None):
         super().__init__(parent)
         self._label = label
+        self._tone = tone_key  # utils.TONES key; None = severity colours
         self._pace = None
         self._sub = ""
         self._stale = False
@@ -273,7 +275,8 @@ class UsageRing(QWidget):
         rect = QRectF(cx - R, cy - R, 2 * R, 2 * R)
         has = self._target_pct is not None
         disp = self._display_pct
-        c = QColor(FG3) if (self._stale or not has) else QColor(color(disp))
+        c = QColor(FG3) if (self._stale or not has) else QColor(
+            tone(self._tone, disp, "text") if self._tone else color(disp))
 
         pen = QPen(QColor(BG3), self.TH)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
@@ -867,12 +870,15 @@ class DashboardWidget(QWidget):
     def _kick_projects(self):
         # the initial parse can take ~8s: always in a thread (the lock in
         # projects.refresh serializes; later incrementals are ~5ms).
-        threading.Thread(target=projects.refresh, daemon=True).start()
+        threading.Thread(target=projects.refresh,
+                         kwargs={"claude_dir": self.cfg.get("claude_dir")},
+                         daemon=True).start()
 
     def _render_models(self):
-        models = projects.summary(days=7)["models"]
+        acct = self.cfg.get("claude_dir")
+        models = projects.summary(days=7, claude_dir=acct)["models"]
         self.pj_empty.setVisible(not models)
-        self.pj_heatmap.set_data(projects.daily(14))
+        self.pj_heatmap.set_data(projects.daily(14, claude_dir=acct))
         maxm = max((m["output"] for m in models), default=1) or 1
         for i, row in enumerate(self.pj_model_rows):
             if i < len(models):
@@ -929,6 +935,21 @@ class DashboardWidget(QWidget):
         self.acc_plan.setProperty("pill", "true")
         head.addWidget(self.acc_plan, 0, Qt.AlignmentFlag.AlignVCenter)
         hbox.addLayout(head)
+        hbox.addSpacing(12)
+        self.show_btns = self._seg_row(
+            hbox, _t("card.show"),
+            [(_t(k), v) for k, v in SHOW_SOURCES],
+            self.cfg.get("sources", "claude"), self._on_sources)
+        self._accounts = accounts.discover(self.cfg.get("claude_dir"))
+        if len(self._accounts) > 1:
+            hbox.addSpacing(8)
+            current = next((d for d in self._accounts
+                            if accounts.key(d) == accounts.key(self.cfg.get("claude_dir"))),
+                           None)
+            self.acc_btns = self._seg_row(
+                hbox, _t("card.account"),
+                [(accounts.label(d), str(d)) for d in self._accounts],
+                str(current) if current else None, self._on_account)
         main.addWidget(hcard)
 
         # ---- Usage (highlight) — ring gauges ----
@@ -938,8 +959,8 @@ class DashboardWidget(QWidget):
         self.rings_box = QHBoxLayout()
         self.rings_box.setContentsMargins(0, 0, 0, 0)
         self.rings_box.setSpacing(6)
-        self.ring_5h = UsageRing(_t("usage.session"))
-        self.ring_7d = UsageRing(_t("usage.week"))
+        self.ring_5h = UsageRing(_t("usage.session"), "claude.5h")
+        self.ring_7d = UsageRing(_t("usage.week"), "claude.week")
         self.rings_box.addWidget(self.ring_5h)
         self.rings_box.addWidget(self.ring_7d)
         ubox.addLayout(self.rings_box)
@@ -955,6 +976,27 @@ class DashboardWidget(QWidget):
         self.meta.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         ubox.addWidget(self.meta)
         main.addWidget(ucard)
+
+        # ---- Codex (only when the dongle shows it) ----
+        self.cx_card, cxbox = self._card()
+        cxbox.addWidget(self._card_title(_t("card.codex")))
+        cxbox.addSpacing(16)
+        cx_rings = QHBoxLayout()
+        cx_rings.setContentsMargins(0, 0, 0, 0)
+        cx_rings.setSpacing(6)
+        self.cx_5h = UsageRing(_t("usage.session"), "codex.5h")
+        self.cx_7d = UsageRing(_t("usage.week"), "codex.week")
+        cx_rings.addWidget(self.cx_5h)
+        cx_rings.addWidget(self.cx_7d)
+        cxbox.addLayout(cx_rings)
+        cxbox.addSpacing(10)
+        self.cx_meta = QLabel("")
+        self.cx_meta.setStyleSheet(f"color: {FG3}; font-size: 11px;")
+        self.cx_meta.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self.cx_meta.setWordWrap(True)
+        cxbox.addWidget(self.cx_meta)
+        self.cx_card.setVisible(self.cfg.get("sources", "claude") != "claude")
+        main.addWidget(self.cx_card)
 
         # ---- Forecast (disclosure) ----
         self._fc_open = bool(self.cfg.get("forecast_expanded", False))
@@ -1161,6 +1203,29 @@ class DashboardWidget(QWidget):
             self._render_models()
         if self._hr_open:
             self._render_hours()
+        self._render_codex()
+
+    def _render_codex(self):
+        # by config, not isVisible(): the first render runs before show()
+        if self.cfg.get("sources", "claude") == "claude":
+            return
+        cx = codex.read(self.cfg.get("codex_dir") or "~/.codex")
+        now = time.time()
+        until = lambda e: max(0, int(e - now)) if e else None
+        if not cx:
+            self.cx_5h.set_data(None, None, False)
+            self.cx_7d.set_data(None, None, False)
+            self.cx_meta.setText(_t("codex.none"))
+            return
+        w5 = (cx.get("window_5h_min") or 300) * 60
+        w7 = (cx.get("window_7d_min") or 10080) * 60
+        self.cx_5h.set_data(cx.get("pct_5h"), until(cx.get("reset_5h_epoch")), False, w5)
+        self.cx_7d.set_data(cx.get("pct_7d"), until(cx.get("reset_7d_epoch")), False, w7)
+        parts = [(cx.get("plan") or "?").capitalize()]
+        if cx.get("age_seconds") is not None:
+            parts.append(_t("codex.seen", age=fmt_time(cx["age_seconds"])))
+        parts.append(_t("codex.hint"))
+        self.cx_meta.setText("  ·  ".join(parts))
 
     def _tick(self):
         # live countdown (1s): recomputes only the times/pace of the usage rows,
@@ -1203,7 +1268,7 @@ class DashboardWidget(QWidget):
             seen.add(model)
             ring = self._scoped_rings.get(model)
             if ring is None:
-                ring = UsageRing(model)
+                ring = UsageRing(model, "claude.model")
                 self._scoped_rings[model] = ring
                 self.rings_box.addWidget(ring)
             ring.set_data(w.get("pct"), until(w.get("reset")), stale, WINDOW_7D)
@@ -1284,6 +1349,8 @@ class DashboardWidget(QWidget):
             parts.append(_t("meta.extra_on"))
         if self.cfg.get("battery_saver", True) and on_battery():
             parts.append(_t("meta.on_battery"))
+        if u.get("token_expired"):
+            parts.append(_t("meta.token_expired"))
         return "  ·  ".join(parts)
 
     # ---- settings ---------------------------------------------------------
@@ -1297,6 +1364,70 @@ class DashboardWidget(QWidget):
             except RuntimeError:
                 pass
         config.save(self.cfg)
+
+    def _seg_row(self, box, caption, options, current, cb):
+        """Caption + exclusive segmented buttons; returns the button group."""
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        cap = QLabel(caption)
+        cap.setStyleSheet(f"color: {FG3}; font-size: 11px;")
+        cap.setFixedWidth(96)
+        row.addWidget(cap)
+        group = QButtonGroup(self)
+        group.setExclusive(True)
+        for text, value in options:
+            b = QPushButton(text)
+            b.setProperty("kind", "seg")
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setChecked(value == current)
+            b.clicked.connect(lambda _c=False, v=value: cb(v))
+            group.addButton(b)
+            row.addWidget(b)
+        row.addStretch()
+        box.addLayout(row)
+        return group
+
+    def _poke_dongle(self):
+        if self.dongle is not None:
+            try:
+                self.dongle._last_usage = None
+                self.dongle.poll()
+            except RuntimeError:
+                pass
+
+    def _on_sources(self, value):
+        if self.cfg.get("sources") == value:
+            return
+        self.cfg["sources"] = value
+        config.save(self.cfg)
+        self.cx_card.setVisible(value != "claude")
+        self._render_codex()
+        self._fit()
+        self._poke_dongle()
+
+    def _on_account(self, path):
+        if accounts.key(path) == accounts.key(self.cfg.get("claude_dir")):
+            return
+        self.cfg["claude_dir"] = path
+        config.save(self.cfg)
+        # every panel below belongs to one account: rebuild instead of
+        # re-pointing rings, forecast rows and the model list one by one
+        for ring in self._scoped_rings.values():
+            ring.deleteLater()
+        self._scoped_rings = {}
+        for row in self._fc_scoped.values():
+            row.deleteLater()
+        self._fc_scoped = {}
+        self._refresh()
+        self._render_snooze()
+        self._fit()
+        self._poke_dongle()
+
+    def _sent_path(self):
+        return str(accounts.state_path("sent_thresholds.json",
+                                       self.cfg.get("claude_dir")))
 
     def _on_mode(self, idx, checked):
         if checked and 0 <= idx < len(SHOW_MODES):
@@ -1412,11 +1543,11 @@ class DashboardWidget(QWidget):
     def _on_snooze(self, minutes):
         if minutes < 0:  # "until reset": silence through the longest open window
             minutes = max(1, int(self._snooze_seconds_until_reset() / 60))
-        notifier.mute(str(SENT_PATH), minutes)
+        notifier.mute(self._sent_path(), minutes)
         self._render_snooze()
 
     def _on_resume(self):
-        notifier.mute(str(SENT_PATH), 0)
+        notifier.mute(self._sent_path(), 0)
         self._render_snooze()
 
     def _render_snooze(self):
@@ -1425,7 +1556,7 @@ class DashboardWidget(QWidget):
             w = it.widget()
             if w:
                 w.deleteLater()
-        until = notifier.muted_until(str(SENT_PATH))
+        until = notifier.muted_until(self._sent_path())
         if until:
             self.snooze_lbl = QLabel()
             self.snooze_lbl.setStyleSheet(
@@ -1459,7 +1590,7 @@ class DashboardWidget(QWidget):
         if lbl is None:
             return
         if until is None:
-            until = notifier.muted_until(str(SENT_PATH))
+            until = notifier.muted_until(self._sent_path())
         if not until:
             self._render_snooze()
             return
