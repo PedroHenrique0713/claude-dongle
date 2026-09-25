@@ -12,6 +12,8 @@ login, nothing sent anywhere.
 <br>
 
 <img src="docs/dongle.png" alt="the dongle" width="240">
+&nbsp;
+<img src="docs/dongle-both.png" alt="the dongle with Claude and Codex side by side" width="240">
 
 <br><br>
 
