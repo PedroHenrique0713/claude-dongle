@@ -33,6 +33,7 @@ def _no_side_effects(monkeypatch):
     monkeypatch.setattr(notifier, "check_thresholds", lambda *a, **k: False)
     monkeypatch.setattr(notifier, "check_telemetry", lambda *a, **k: False)
     monkeypatch.setattr(config, "save", lambda *a, **k: None)
+    monkeypatch.setattr(config, "sync_live", lambda cfg: False)  # never the real file
     monkeypatch.setattr(history, "record", lambda *a, **k: None)
     monkeypatch.setattr(history, "attach_forecasts", lambda *a, **k: None)
     monkeypatch.setattr(history, "series", lambda *a, **k: [])
