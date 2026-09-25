@@ -1,4 +1,4 @@
-import subprocess, time, math, sys, os
+import time, math, sys, os
 
 from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF, QPropertyAnimation, QEasingCurve
@@ -6,6 +6,7 @@ from PyQt6.QtGui import (QPainter, QColor, QBrush, QPen, QFont, QFontMetrics,
                          QPainterPath, QRegion)
 
 from . import accounts, codex, logos, monitor, config, notifier, usage_api
+from .procs import dev_open, process_names, tools_running
 from .i18n import t as _t
 from .utils import (tone, TONES, mix, fmt_time as _fmt_time, limits_blocking,
                    availability_text, on_battery,
@@ -31,125 +32,6 @@ PS_CACHE_S = 4 if sys.platform.startswith("linux") else 20
 BREATH_FRAME_MS = 80    # the timer ticks this often; a frame is only painted
                         # when the border actually changes (see _breath)
 _ANIMATE = os.environ.get("QT_QPA_PLATFORM") != "offscreen"  # no animation when headless
-
-# comm of the processes that mean "working on dev" (show_mode=dev mode).
-# Off Linux: prefix match on names, the only thing the cheap listing gives.
-DEV_PROCS = ["code", "cursor", "ptyxis", "gnome-terminal", "kgx", "konsole",
-             "alacritty", "kitty", "wezterm", "tilix", "windowsterminal",
-             "iterm", "terminal"]
-# Linux, exact comm (truncated at 15 chars by the kernel). An editor's main
-# process lives only while a window is open.
-EDITORS = {"code", "code-oss", "codium", "cursor", "zed", "zed-editor"}
-# Terminal emulators. Ptyxis and GNOME Terminal keep a background service
-# alive with no window at all (`ptyxis --gapplication-service` → ptyxis-agent),
-# so a terminal counts only while it has a child that is not one of its own
-# helpers: a shell, i.e. an open tab. Matching the name alone kept the dongle
-# on screen forever after the last terminal closed.
-TERMINALS = {"ptyxis", "ptyxis-agent", "gnome-terminal-", "kgx", "konsole",
-             "alacritty", "kitty", "wezterm-gui", "tilix", "xterm", "foot",
-             "xfce4-terminal", "terminator", "blackbox"}
-# show_mode=claude: the AI tools themselves, exact names — a prefix "code"
-# matched "codex", and "claude" matched this very process (claude-dongle).
-TOOLS = {"claude": {"claude", "claude.exe"}, "codex": {"codex"}}
-
-
-def _children(pid):
-    """Linux: child pids of a process (every thread's list: a terminal may
-    spawn its shells from a worker thread)."""
-    out = []
-    try:
-        tasks = os.listdir(f"/proc/{pid}/task")
-    except OSError:
-        return out
-    for t in tasks:
-        try:
-            with open(f"/proc/{pid}/task/{t}/children") as f:
-                out += [int(c) for c in f.read().split()]
-        except (OSError, ValueError):
-            continue
-    return out
-
-
-def _comm(pid):
-    try:
-        with open(f"/proc/{pid}/comm") as f:
-            return f.read().strip().lower()
-    except OSError:
-        return None
-
-
-def _tab_open(pid):
-    """A terminal process has a child that is not one of its own helpers
-    (ptyxis → ptyxis-agent is a helper; ptyxis-agent → bash is a tab)."""
-    return any(_comm(c) not in TERMINALS | {None} for c in _children(pid))
-
-
-def dev_open(procs=None, tab_open=_tab_open):
-    """An editor window or a terminal tab is open (show_mode=dev).
-
-    procs: (pid, comm) pairs; the live /proc listing when None. Stops at the
-    first hit, and only terminals get their children read, so it costs about
-    what the old name-only scan did."""
-    if procs is None and not sys.platform.startswith("linux"):
-        return any(p.startswith(n) for p in _process_names() for n in DEV_PROCS)
-    for pid, comm in (_proc_comms() if procs is None else procs):
-        if comm in EDITORS or (comm in TERMINALS and tab_open(pid)):
-            return True
-    return False
-
-
-def tools_running(sources, procs=None):
-    """The AI tool(s) the dongle shows are running (show_mode=claude)."""
-    want = set().union(*(TOOLS[s] for s in
-                         (("claude", "codex") if sources == "both" else (sources,))))
-    if procs is None and not sys.platform.startswith("linux"):
-        return any(p.startswith(n) for p in _process_names() for n in want)
-    return any(c in want for _, c in (_proc_comms() if procs is None else procs))
-
-
-def _proc_comms():
-    """Linux: (pid, comm) of every process but this one — it must never be
-    the reason it stays on screen."""
-    me = os.getpid()
-    try:
-        entries = os.scandir("/proc")
-    except OSError:
-        return
-    for entry in entries:
-        if not entry.name.isdigit() or int(entry.name) == me:
-            continue
-        c = _comm(entry.name)
-        if c is not None:  # None: it died between the scan and the read
-            yield int(entry.name), c
-
-
-def _process_names():
-    """Yields running process names, lowercase. Empty if unavailable.
-
-    On Linux this reads /proc directly instead of forking `ps`: measured at
-    14ms against 114ms, and the caller stops at the first match, so the
-    visibility check every 5s stopped costing ~2% of a core all day.
-    macOS/Windows keep the subprocess (no /proc there).
-    """
-    if sys.platform.startswith("linux"):
-        for _, comm in _proc_comms():
-            yield comm
-        return
-    try:
-        if sys.platform == "win32":
-            out = subprocess.check_output(
-                ["tasklist", "/fo", "csv", "/nh"], text=True, timeout=3)
-            for ln in out.splitlines():
-                if ln:
-                    yield ln.split('","')[0].lstrip('"').lower()
-            return
-        out = subprocess.check_output(["ps", "-eo", "comm="], text=True, timeout=3)
-        # comm may include a path on macOS: keep just the basename
-        for line in out.splitlines():
-            yield line.strip().rsplit("/", 1)[-1].lower()
-    except Exception:
-        return
-
 
 class DongleWidget(QWidget):
     def __init__(self, cfg):
@@ -337,7 +219,10 @@ class DongleWidget(QWidget):
             return
         # Hidden: with no dev tools open the service has no reason to live.
         # The bashrc hook resurrects it on the next terminal (0 = never quit).
-        quit_min = self.cfg.get("idle_quit_minutes", 10)
+        # Only Linux has such a hook: on Windows/macOS nothing starts it again
+        # before the next login, so there it stays, hidden, instead of quitting.
+        quit_min = (self.cfg.get("idle_quit_minutes", 10)
+                    if sys.platform.startswith("linux") else 0)
         if quit_min:
             self._idle_secs += VIS_CHECK_MS / 1000
             if self._idle_secs >= quit_min * 60:
@@ -366,7 +251,7 @@ class DongleWidget(QWidget):
             # match "opencode"). any() stops at the first matching process.
             names = [n.lower() for n in self.cfg.get("show_processes", [])]
             visible = bool(names) and any(
-                p.startswith(n) for p in _process_names() for n in names)
+                p.startswith(n) for p in process_names() for n in names)
         self._ps_cache = (now, visible)
         return visible
 
