@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.0 — 2026-09-25
 
 ### Added
 
@@ -18,6 +18,15 @@
 
 ### Fixed
 
+- **The dongle never hid after the last terminal closed.** Ptyxis and GNOME
+  Terminal keep a background service alive with no window, and matching the
+  process name saw it forever. A terminal now counts only while it has an open
+  tab (a child that is not one of its own helpers).
+- **Codex counted as VS Code.** The `code` prefix matched `codex`, and `claude`
+  matched `claude-dongle` itself. Names match exactly on Linux and Windows.
+- **Gone until the next login on Windows and macOS.** After 10 minutes hidden
+  the dongle quits, and only Linux has something (the terminal hook) to start
+  it again. It stays running, hidden, everywhere else.
 - The default account's identity was read from `~/.claude/.claude.json`, a
   location Claude Code stopped updating; the newest of it and `~/.claude.json`
   wins now.
