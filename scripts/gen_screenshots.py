@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Generates the README screenshots with FAKE data, offscreen.
 
-Regenerates docs/{dongle,dashboard,dashboard-full,notifications}.png through the
+Regenerates docs/{dongle,dongle-both,dashboard,dashboard-full,notifications}.png
+through the
 app's own renderer (pixel-faithful), swapping real account/email/projects for
 anonymous data — so no PII ever leaks into captures of a repo that may go public.
 
@@ -71,7 +72,9 @@ FAKE_NOTIFS = [
 ]
 
 # --- neutralize everything that leaves the machine / writes / notifies -------
-from claude_dongle import monitor, projects, history, notifier, config, i18n
+from pathlib import Path
+from claude_dongle import (accounts, codex, monitor, projects, history, notifier,
+                           config, i18n)
 
 # The README is in English; without this the shots would follow the
 # machine's locale (pt_BR here).
@@ -94,6 +97,16 @@ history.hourly_profile = lambda *a, **k: {
     "hours": FAKE_HOURS, "days": 14, "peak": 17}
 history.attach_forecasts = lambda *a, **k: None
 config.save = lambda *a, **k: None
+# The panel lists the Claude accounts found in the home dir: the real ones
+# (names, org) must never reach a public README.
+FAKE_ACCOUNTS = {"": "Personal", "work": "Work"}
+accounts.discover = lambda current=None: [Path.home() / ".claude",
+                                          Path.home() / ".claude-work"]
+accounts.label = lambda d: FAKE_ACCOUNTS.get(accounts.key(d), "Personal")
+codex.read = lambda d: {"pct_5h": 38.0, "pct_7d": 21.0, "reset_5h_epoch": NOW + 7200,
+                        "reset_7d_epoch": NOW + 400_000, "plan": "plus",
+                        "age_seconds": 120, "window_5h_min": 300,
+                        "window_7d_min": 10080}
 
 
 def _fake_series(metric, *a, **k):
@@ -133,6 +146,18 @@ def gen_app_shots():
     pm.fill(QColor("#000000"))
     d.render(pm)
     pm.save(str(OUT / "dongle.png"))
+    d.close()
+
+    # split: Claude and Codex side by side in the same 216x36
+    d = DongleWidget(_cfg(show_mode="always", sources="both"))
+    d._overflow = False
+    d._critical = False
+    d.update(); app.processEvents()
+    pm = QPixmap(DONGLE_W, DONGLE_H)
+    pm.fill(QColor("#000000"))
+    d.render(pm)
+    pm.save(str(OUT / "dongle-both.png"))
+    d.close()
 
     for name, over in (("dashboard", dict(forecast_expanded=False, projects_expanded=False,
                                           settings_expanded=False)),
@@ -148,7 +173,7 @@ def gen_app_shots():
         app.processEvents()
         w.grab().save(str(OUT / f"{name}.png"))
         w.close(); app.processEvents()
-    print("app shots:", "dongle dashboard dashboard-full")
+    print("app shots:", "dongle dongle-both dashboard dashboard-full")
 
 
 def gen_notifs():
