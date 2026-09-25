@@ -20,6 +20,9 @@ def home(tmp_path, monkeypatch):
     cfg_dir = tmp_path / "cfg"
     monkeypatch.setattr(config, "CONFIG_DIR", cfg_dir)
     monkeypatch.setattr(config, "CONFIG_PATH", cfg_dir / "config.json")
+    # save() moves this marker; left behind, later tests would take the real
+    # config for "changed by another process" and load it
+    monkeypatch.setattr(config, "_seen_mtime", None)
     monkeypatch.setattr(usage_api, "_caches", {})
     for name, org in ((".claude", "Main Org"), (".claude-work", "Work Inc"),
                       (".claude-side-gig", "Side")):
