@@ -4,12 +4,12 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
+from . import accounts
 from . import history
 from . import usage_api
 from .utils import availability
 
-CLAUDE_JSON = Path.home() / ".claude" / ".claude.json"
-_prev_identity = None
+_prev_identity = {}  # account dir key -> last identity seen
 
 
 def read_sessions(claude_dir: str) -> list:
@@ -35,19 +35,19 @@ def read_sessions(claude_dir: str) -> list:
     return sessions
 
 
-def _active_token_tier():
+def _active_token_tier(claude_dir=None):
     """(subscriptionType, rateLimitTier) of the ACTIVE account, read from the
     stored token — more current than oauthAccount, which Claude Code is slow
     to rewrite after an account switch."""
-    o = usage_api.claude_oauth()
+    o = usage_api.claude_oauth(claude_dir)
     return o.get("subscriptionType"), o.get("rateLimitTier")
 
 
-def get_account_identity() -> dict:
+def get_account_identity(claude_dir=None) -> dict:
     info = {"account_name": None, "org_name": None, "plan": None, "email": None,
             "uuid": None, "identity_stale": False}
     try:
-        data = json.loads(CLAUDE_JSON.read_text())
+        data = json.loads(accounts.identity_path(claude_dir).read_text())
         oa = data.get("oauthAccount", {})
         info["account_name"] = oa.get("displayName") or oa.get("organizationName") or oa.get("emailAddress", "default")
         info["org_name"] = oa.get("organizationName")
@@ -58,7 +58,7 @@ def get_account_identity() -> dict:
         # from oauthAccount, oauthAccount is STALE (an account switch Claude
         # Code hasn't rewritten yet) → the old name/email can't be trusted;
         # the real plan comes from the token.
-        sub, tier = _active_token_tier()
+        sub, tier = _active_token_tier(claude_dir)
         info["tier"] = tier  # token tier: identifies the active account for the cache
         oa_tiers = {oa.get("organizationRateLimitTier"), oa.get("userRateLimitTier")}
         if tier and tier not in oa_tiers:
@@ -69,20 +69,23 @@ def get_account_identity() -> dict:
     return info
 
 
-def detect_account_change():
-    global _prev_identity
-    cur = get_account_identity()
+def detect_account_change(claude_dir=None, cur=None):
+    """A login change INSIDE one account dir (/login to another account).
+    Picking another dir in the dongle is not one: each dir is compared only
+    with its own previous identity."""
+    cur = cur or get_account_identity(claude_dir)
     name = cur.get("account_name")
-    if _prev_identity is None:
-        _prev_identity = cur
+    k = accounts.key(claude_dir)
+    prev = _prev_identity.get(k)
+    _prev_identity[k] = cur
+    if prev is None:
         return False, name
     changed = (
-        cur.get("uuid") != _prev_identity.get("uuid")
-        or cur.get("account_name") != _prev_identity.get("account_name")
-        or cur.get("email") != _prev_identity.get("email")
-        or cur.get("identity_stale") != _prev_identity.get("identity_stale")
+        cur.get("uuid") != prev.get("uuid")
+        or cur.get("account_name") != prev.get("account_name")
+        or cur.get("email") != prev.get("email")
+        or cur.get("identity_stale") != prev.get("identity_stale")
     )
-    _prev_identity = cur
     return changed, name
 
 
@@ -98,9 +101,10 @@ def calc_usage(state: dict) -> dict:
                            if next_reset else None)
     seconds_until_reset_5h = None
 
-    sessions = read_sessions(state["claude_dir"])
-    account = get_account_identity()
-    account_changed, _ = detect_account_change()
+    claude_dir = state.get("claude_dir")
+    sessions = read_sessions(claude_dir or str(accounts.DEFAULT_DIR))
+    account = get_account_identity(claude_dir)
+    account_changed, _ = detect_account_change(claude_dir, account)
 
     # Cache account key = uuid + token tier. The tier changes on an account
     # switch even while oauthAccount (uuid) is stale, so the previous account's
@@ -108,7 +112,8 @@ def calc_usage(state: dict) -> dict:
     acct_key = account.get("uuid") or ""
     if account.get("tier"):
         acct_key = f"{acct_key}:{account['tier']}"
-    api_data = usage_api.fetch(state.get("api_poll_interval", 60), account=acct_key)
+    api_data = usage_api.fetch(state.get("api_poll_interval", 60),
+                               account=acct_key, claude_dir=claude_dir)
 
     stale = False
     scope_7d = None
@@ -163,6 +168,9 @@ def calc_usage(state: dict) -> dict:
         "plan": account.get("plan") or "unknown",
         "email": account.get("email", ""),
         "identity_stale": account.get("identity_stale", False),
+        "account_key": accounts.key(claude_dir),
+        "account_label": accounts.label(claude_dir),
+        "token_expired": not usage_api.has_token(claude_dir),
         "active_sessions": len(active_sessions),
         "idle_sessions": len(idle_sessions),
         "last_reset": last_reset.isoformat() if last_reset else None,

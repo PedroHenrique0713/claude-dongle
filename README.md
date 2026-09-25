@@ -136,6 +136,22 @@ claude-dongle setup     # (optional) launch it automatically on login
 | `claude-dongle config` | open just the settings panel |
 | `claude-dongle setup` | set up autostart on login |
 | `claude-dongle uninstall` | remove autostart |
+| `claude-dongle accounts` | list the Claude Code accounts found on this machine |
+| `claude-dongle use NAME` | watch another account (`use work`, `use default`) |
+| `claude-dongle source S` | show `claude`, `codex` or `both` (split in half) |
+
+**Several accounts, and Codex.** Claude Code keeps each login in its own config
+dir (`~/.claude`, or the `CLAUDE_CONFIG_DIR` of a wrapper such as
+`claude-work() { CLAUDE_CONFIG_DIR=~/.claude-work claude; }`). The dongle watches
+one of them at a time; pick it in the panel or with `use`. Usage cache,
+notifications and the per-model history are kept per account, so switching
+never passes one account's numbers off as another's. An account whose Claude
+Code has been closed for a while has an expired login and shows `--` until it
+is opened again. The Codex CLI's 5h and weekly limits come from its own session
+logs (`~/.codex/sessions`), with no network and no token; they move while Codex
+runs. In `both`, Claude takes the left side (orange: session, week, per-model
+week) and Codex the right (purple: session, week), each number deepening in
+tone as its limit fills.
 
 **Dongle interactions:** drag to reposition (it snaps to edges); click to open the
 dashboard; middle-click to refresh now. The border breathes amber when the
@@ -150,7 +166,10 @@ Tune it from the panel or by editing `~/.config/claude-dongle/config.json`:
 |---|---|---|
 | `language` | `"auto"` | `auto` follows your system locale; pin it with `en` or `pt-BR` |
 | `thresholds` | `[50, 70, 85, 95]` | percentages that trigger a notification |
-| `show_mode` | `"dev"` | when to show the dongle: `always`, `claude`, `dev` or `custom` |
+| `show_mode` | `"dev"` | when to show the dongle: `always`, `claude` (the tools it shows are running), `dev` or `custom` |
+| `claude_dir` | `"~/.claude"` | the Claude Code account to watch (its config dir) |
+| `sources` | `"claude"` | what the dongle shows: `claude`, `codex` or `both` |
+| `codex_dir` | `"~/.codex"` | the Codex CLI home (`$CODEX_HOME` when set) |
 | `poll_interval` | `5` | seconds between dongle refreshes |
 | `api_poll_interval` | `300` | minimum interval between API calls (the endpoint rate-limits aggressive polling) |
 | `dongle_opacity` | `0.85` | dongle opacity (0 to 1) |

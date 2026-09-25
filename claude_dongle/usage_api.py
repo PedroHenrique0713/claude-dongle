@@ -8,17 +8,18 @@ import urllib.error
 from datetime import datetime
 from pathlib import Path
 
-from . import config
+from . import accounts, config
 
-CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 # On macOS, Claude Code stores its credentials in the Keychain under this
 # service name instead of (or in addition to) ~/.claude/.credentials.json.
 MAC_KEYCHAIN_SERVICE = "Claude Code-credentials"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
-CACHE_PATH = config.CONFIG_DIR / "usage_cache.json"
-# The monitor's own cache for refreshed tokens — it NEVER writes to Claude
-# Code's .credentials.json (avoids racing/corrupting a file Claude Code owns).
-TOKEN_CACHE_PATH = config.CONFIG_DIR / "token_cache.json"
+# Both caches are per account (accounts.state_path): usage_cache.json holds the
+# last real reading; token_cache.json is the monitor's own cache for refreshed
+# tokens — it NEVER writes to Claude Code's .credentials.json (avoids
+# racing/corrupting a file Claude Code owns).
+CACHE_FILE = "usage_cache.json"
+TOKEN_CACHE_FILE = "token_cache.json"
 # Endpoint and client_id validated 2026-07-10 with a fake refreshToken: the
 # server answered invalid_grant (it understood grant_type/client_id/format).
 # console.* gives 404/Cloudflare; the right host is api.anthropic.com with no
@@ -27,8 +28,19 @@ OAUTH_TOKEN_URL = "https://api.anthropic.com/v1/oauth/token"
 OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"  # Claude Code's public client id
 TOKEN_SKEW = 60  # refresh 60s before expiresAt
 
-_cache = {"data": None, "fetched_at": 0, "next_try": 0, "account": None}
-_disk_checked = False
+# One slot per account dir: switching accounts back and forth reuses each
+# one's last reading and keeps each one's 429 backoff, instead of refetching
+# (and risking the long 429 window) on every switch.
+_caches = {}
+
+
+def _slot(claude_dir):
+    k = accounts.key(claude_dir)
+    if k not in _caches:
+        _caches[k] = {"data": None, "fetched_at": 0, "next_try": 0,
+                      "account": None, "disk_checked": False,
+                      "dir": claude_dir}
+    return _caches[k]
 
 
 def _load_json(path):
@@ -60,11 +72,14 @@ def _mac_keychain_oauth():
         return {}
 
 
-def claude_oauth():
-    """Claude Code's stored OAuth blob: credentials file, then macOS Keychain."""
-    d = _load_json(CREDENTIALS_PATH)
+def claude_oauth(claude_dir=None):
+    """Claude Code's stored OAuth blob: credentials file, then macOS Keychain
+    (default account only — the Keychain item is named after the default
+    config dir)."""
+    d = _load_json(accounts.credentials_path(claude_dir))
     oauth = d.get("claudeAiOauth", d) if isinstance(d, dict) else {}
-    if not oauth.get("accessToken") and sys.platform == "darwin":
+    if not oauth.get("accessToken") and sys.platform == "darwin" \
+            and accounts.is_default(claude_dir):
         oauth = _mac_keychain_oauth() or oauth
     return oauth
 
@@ -105,7 +120,7 @@ def _refresh_token(refresh_token):
     }
 
 
-def _read_token():
+def _read_token(claude_dir=None):
     """Token for the usage API, resilient to Claude Code being closed. Order:
     (1) valid accessToken from Claude Code; (2) valid own cache;
     (3) refresh, but only with an OWN refreshToken. Never writes to
@@ -117,10 +132,11 @@ def _read_token():
     back to Claude Code's token — we only refresh with our own cached
     refreshToken (which nothing seeds automatically today, so the refresh
     path stays inert and safe)."""
-    tok = _valid_access(claude_oauth())
+    tok = _valid_access(claude_oauth(claude_dir))
     if tok:
         return tok
-    cache = _load_json(TOKEN_CACHE_PATH)
+    token_cache = accounts.state_path(TOKEN_CACHE_FILE, claude_dir)
+    cache = _load_json(token_cache)
     if cache.get("access_token") and cache.get("expires_at", 0) > time.time() + TOKEN_SKEW:
         return cache["access_token"]
     rt = cache.get("refresh_token")  # NEVER Claude Code's (rotates → logs it out)
@@ -130,10 +146,22 @@ def _read_token():
     if not new:
         return None
     try:
-        _write_private(TOKEN_CACHE_PATH, json.dumps(new))
+        _write_private(token_cache, json.dumps(new))
     except OSError:
         pass
     return new["access_token"]
+
+
+def has_token(claude_dir=None) -> bool:
+    """Whether the next fetch could authenticate, without refreshing anything.
+    An account whose Claude Code has been closed for hours has an expired
+    token: its numbers can only be the last ones seen."""
+    if _valid_access(claude_oauth(claude_dir)):
+        return True
+    cache = _load_json(accounts.state_path(TOKEN_CACHE_FILE, claude_dir))
+    return bool(cache.get("refresh_token") or (
+        cache.get("access_token")
+        and cache.get("expires_at", 0) > time.time() + TOKEN_SKEW))
 
 
 def _parse_iso(ts):
@@ -252,19 +280,18 @@ def _normalize(body):
     return out
 
 
-def _load_disk():
+def _load_disk(slot):
     # Survives restarts and dedupes across processes: the last real data point
     # lives on disk and any new process starts from it instead of the network.
-    global _disk_checked
-    if _disk_checked:
+    if slot["disk_checked"]:
         return
-    _disk_checked = True
+    slot["disk_checked"] = True
     try:
-        d = json.loads(CACHE_PATH.read_text())
+        d = json.loads(accounts.state_path(CACHE_FILE, slot["dir"]).read_text())
         d["data"].setdefault("fetched_at", d["fetched_at"])  # old-version cache
-        _cache["data"] = d["data"]
-        _cache["fetched_at"] = d["fetched_at"]
-        _cache["account"] = d.get("account")  # None in old-version cache
+        slot["data"] = d["data"]
+        slot["fetched_at"] = d["fetched_at"]
+        slot["account"] = d.get("account")  # None in old-version cache
     except (OSError, json.JSONDecodeError, KeyError, AttributeError):
         pass
 
@@ -272,43 +299,45 @@ def _load_disk():
 def invalidate():
     """Force the next fetch to hit the network (ignores min_interval). Respects
     an active 429 backoff — never re-fires an endpoint that just limited us."""
-    _cache["fetched_at"] = 0
+    for c in _caches.values():
+        c["fetched_at"] = 0
 
 
-def _stale():
-    if _cache["data"] is None:
-        _load_disk()
-    if _cache["data"] is None:
+def _stale(slot):
+    if slot["data"] is None:
+        _load_disk(slot)
+    if slot["data"] is None:
         return None
-    d = dict(_cache["data"])
+    d = dict(slot["data"])
     d["stale"] = True
-    d["age_seconds"] = int(time.time() - _cache["fetched_at"])
+    d["age_seconds"] = int(time.time() - slot["fetched_at"])
     return d
 
 
-def fetch(min_interval=60, account=None):
+def fetch(min_interval=60, account=None, claude_dir=None):
     now = time.time()
-    if _cache["data"] is None:
-        _load_disk()
+    slot = _slot(claude_dir)
+    if slot["data"] is None:
+        _load_disk(slot)
     # Account switched: the cached data (memory or disk, shared across
     # accounts) belongs to ANOTHER account. Drop it rather than show someone
     # else's usage — a wrong number is worse than "--". A cache without a
     # stamp (None, old version) is treated as compatible until the next fetch
     # stamps it.
-    if account is not None and _cache["account"] not in (None, account):
-        _cache["data"] = None
-        _cache["account"] = None
-        _cache["next_try"] = 0
-    if _cache["data"] is not None and now - _cache["fetched_at"] < min_interval:
-        return _cache["data"]
+    if account is not None and slot["account"] not in (None, account):
+        slot["data"] = None
+        slot["account"] = None
+        slot["next_try"] = 0
+    if slot["data"] is not None and now - slot["fetched_at"] < min_interval:
+        return slot["data"]
     # Back off on failed attempts too, otherwise every poll (dongle 30s,
     # dashboard 5s) re-fires the request and feeds its own 429.
-    if now < _cache["next_try"]:
-        return _stale()
-    token = _read_token()
+    if now < slot["next_try"]:
+        return _stale(slot)
+    token = _read_token(claude_dir)
     if not token:
-        _cache["next_try"] = now + min_interval
-        return _stale()
+        slot["next_try"] = now + min_interval
+        return _stale(slot)
     req = urllib.request.Request(USAGE_URL, headers={
         "Authorization": f"Bearer {token}",
         "anthropic-beta": "oauth-2025-04-20",
@@ -319,22 +348,22 @@ def fetch(min_interval=60, account=None):
             body = json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         # 429 windows are long and retrying renews the penalty: space out well
-        _cache["next_try"] = now + (900 if e.code == 429 else min_interval)
-        return _stale()
+        slot["next_try"] = now + (900 if e.code == 429 else min_interval)
+        return _stale(slot)
     except (urllib.error.URLError, json.JSONDecodeError, OSError):
-        _cache["next_try"] = now + min_interval
-        return _stale()
+        slot["next_try"] = now + min_interval
+        return _stale(slot)
     data = _normalize(body)
     if data.get("pct_7d") is None and data.get("pct_5h") is None:
-        _cache["next_try"] = now + min_interval
-        return _stale()
+        slot["next_try"] = now + min_interval
+        return _stale(slot)
     data["fetched_at"] = now  # data timestamp; history dedupes by it
-    _cache["data"] = data
-    _cache["fetched_at"] = now
-    _cache["next_try"] = 0
-    _cache["account"] = account
+    slot["data"] = data
+    slot["fetched_at"] = now
+    slot["next_try"] = 0
+    slot["account"] = account
     try:
-        _write_private(CACHE_PATH, json.dumps(
+        _write_private(accounts.state_path(CACHE_FILE, claude_dir), json.dumps(
             {"data": data, "fetched_at": now, "account": account}))
     except OSError:
         pass

@@ -82,8 +82,8 @@ notifier.check_thresholds = lambda *a, **k: False
 notifier.check_telemetry = lambda *a, **k: False
 monitor.calc_usage = lambda cfg: dict(FAKE_U)
 projects.refresh = lambda *a, **k: 0
-projects.summary = lambda days=7, limit=8: {"models": FAKE_MODELS, "days": days}
-projects.daily = lambda days=14: [
+projects.summary = lambda days=7, limit=8, **k: {"models": FAKE_MODELS, "days": days}
+projects.daily = lambda days=14, **k: [
     (f"2026-06-{20 + i:02d}", HEAT[i] * 120_000) for i in range(14)]
 history.record = lambda *a, **k: None
 # A plausible working day — never the real profile: it would put the author's
