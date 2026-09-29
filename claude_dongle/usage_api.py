@@ -38,7 +38,7 @@ def _slot(claude_dir):
     k = accounts.key(claude_dir)
     if k not in _caches:
         _caches[k] = {"data": None, "fetched_at": 0, "next_try": 0,
-                      "account": None, "disk_checked": False,
+                      "account": None, "disk_mtime": None,
                       "dir": claude_dir}
     return _caches[k]
 
@@ -283,17 +283,32 @@ def _normalize(body):
 def _load_disk(slot):
     # Survives restarts and dedupes across processes: the last real data point
     # lives on disk and any new process starts from it instead of the network.
-    if slot["disk_checked"]:
-        return
-    slot["disk_checked"] = True
+    # Re-read whenever the file changes: an empty slot sitting out a backoff
+    # must pick up what another process fetched meanwhile, not stay "--".
+    path = accounts.state_path(CACHE_FILE, slot["dir"])
     try:
-        d = json.loads(accounts.state_path(CACHE_FILE, slot["dir"]).read_text())
+        mtime = path.stat().st_mtime
+    except OSError:
+        return
+    if mtime == slot["disk_mtime"]:
+        return
+    slot["disk_mtime"] = mtime
+    try:
+        d = json.loads(path.read_text())
         d["data"].setdefault("fetched_at", d["fetched_at"])  # old-version cache
         slot["data"] = d["data"]
         slot["fetched_at"] = d["fetched_at"]
         slot["account"] = d.get("account")  # None in old-version cache
     except (OSError, json.JSONDecodeError, KeyError, AttributeError):
         pass
+
+
+def _retry_after(err, default):
+    try:
+        secs = int(err.headers.get("Retry-After"))
+    except (TypeError, ValueError, AttributeError):
+        return default
+    return min(max(secs, 60), default)
 
 
 def invalidate():
@@ -347,8 +362,10 @@ def fetch(min_interval=60, account=None, claude_dir=None):
         with urllib.request.urlopen(req, timeout=10) as r:
             body = json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
-        # 429 windows are long and retrying renews the penalty: space out well
-        slot["next_try"] = now + (900 if e.code == 429 else min_interval)
+        # 429 windows are long and retrying renews the penalty: space out well,
+        # unless the server says when to come back
+        slot["next_try"] = now + (_retry_after(e, 900) if e.code == 429
+                                  else min_interval)
         return _stale(slot)
     except (urllib.error.URLError, json.JSONDecodeError, OSError):
         slot["next_try"] = now + min_interval

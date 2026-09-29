@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_dongle import accounts, config, history, projects, usage_api
+from claude_dongle import accounts, config, history, monitor, projects, usage_api
 from claude_dongle.utils import TONES, FG3, tone
 
 
@@ -24,6 +24,7 @@ def home(tmp_path, monkeypatch):
     # config for "changed by another process" and load it
     monkeypatch.setattr(config, "_seen_mtime", None)
     monkeypatch.setattr(usage_api, "_caches", {})
+    monkeypatch.setattr(monitor, "_tier_base", {})
     for name, org in ((".claude", "Main Org"), (".claude-work", "Work Inc"),
                       (".claude-side-gig", "Side")):
         d = h / name
@@ -82,6 +83,57 @@ def test_usage_cache_never_leaks_between_accounts(home):
     assert main["pct_7d"] == 34.0
     assert usage_api.fetch(300, claude_dir=home / ".claude-work") is None
     assert usage_api.has_token(home / ".claude-work") is False
+
+
+def test_empty_slot_in_backoff_picks_up_another_writers_cache(home):
+    # The first fetch after a switch failed and the account sits out its
+    # backoff with no data. Another process then caches a reading: it must
+    # show up, not stay "--" until the backoff ends.
+    d = home / ".claude-work"
+    usage_api._slot(d)["next_try"] = time.time() + 900
+    assert usage_api.fetch(300, claude_dir=d) is None
+    config.CONFIG_DIR.mkdir(parents=True)
+    (config.CONFIG_DIR / "usage_cache.work.json").write_text(json.dumps(
+        {"data": {"pct_5h": 12.0, "pct_7d": 6.0}, "fetched_at": time.time() - 30,
+         "account": None}))
+    assert usage_api.fetch(300, claude_dir=d)["pct_7d"] == 6.0
+
+
+def test_429_honours_retry_after_within_the_long_window():
+    class E:
+        def __init__(self, h): self.headers = h
+    assert usage_api._retry_after(E({"Retry-After": "120"}), 900) == 120
+    assert usage_api._retry_after(E({"Retry-After": "5"}), 900) == 60
+    assert usage_api._retry_after(E({"Retry-After": "7200"}), 900) == 900
+    assert usage_api._retry_after(E({}), 900) == 900
+
+
+def _login(d, tier, oa_tier, uuid="u1"):
+    (d / ".credentials.json").write_text(json.dumps(
+        {"claudeAiOauth": {"accessToken": "t", "subscriptionType": "max",
+                           "rateLimitTier": tier}}))
+    (d / ".claude.json").write_text(json.dumps({"oauthAccount": {
+        "displayName": "Work", "accountUuid": uuid,
+        "organizationRateLimitTier": oa_tier}}))
+
+
+def test_token_tier_differing_from_oauth_account_is_not_a_switch(home):
+    # A Max 5x login whose org carries max_20x: the mismatch is permanent,
+    # reopening Claude Code never clears it.
+    d = home / ".claude-work"
+    _login(d, "default_claude_max_5x", "default_claude_max_20x")
+    assert monitor.get_account_identity(d)["identity_stale"] is False
+    assert monitor.get_account_identity(d)["identity_stale"] is False
+
+
+def test_token_tier_changing_under_the_same_oauth_account_is_a_switch(home):
+    d = home / ".claude-work"
+    _login(d, "default_claude_max_5x", "default_claude_max_5x")
+    assert monitor.get_account_identity(d)["identity_stale"] is False
+    _login(d, "default_claude_max_20x", "default_claude_max_5x")  # /login, not rewritten yet
+    assert monitor.get_account_identity(d)["identity_stale"] is True
+    _login(d, "default_claude_max_20x", "default_claude_max_20x", uuid="u2")  # rewritten
+    assert monitor.get_account_identity(d)["identity_stale"] is False
 
 
 def test_live_keys_follow_another_writer(home):

@@ -10,6 +10,7 @@ from . import usage_api
 from .utils import availability
 
 _prev_identity = {}  # account dir key -> last identity seen
+_tier_base = {}  # account dir key -> (oauthAccount uuid, token tier) first seen
 
 
 def read_sessions(claude_dir: str) -> list:
@@ -54,14 +55,19 @@ def get_account_identity(claude_dir=None) -> dict:
         info["plan"] = oa.get("organizationType") or oa.get("organizationRateLimitTier", "?")
         info["email"] = oa.get("emailAddress")
         info["uuid"] = oa.get("accountUuid", "")
-        # The ACTIVE account comes from the token. If the token's tier diverges
-        # from oauthAccount, oauthAccount is STALE (an account switch Claude
-        # Code hasn't rewritten yet) → the old name/email can't be trusted;
-        # the real plan comes from the token.
+        # The ACTIVE account comes from the token. If the token's tier CHANGES
+        # while oauthAccount stays the same, oauthAccount is STALE (an account
+        # switch Claude Code hasn't rewritten yet) → the old name/email can't
+        # be trusted; the real plan comes from the token. A token tier that
+        # merely differs from oauthAccount's proves nothing: a Max 5x login
+        # can carry an org tier of max_20x for good.
         sub, tier = _active_token_tier(claude_dir)
         info["tier"] = tier  # token tier: identifies the active account for the cache
-        oa_tiers = {oa.get("organizationRateLimitTier"), oa.get("userRateLimitTier")}
-        if tier and tier not in oa_tiers:
+        k = accounts.key(claude_dir)
+        base = _tier_base.get(k)
+        if base is None or base[0] != info["uuid"]:
+            _tier_base[k] = base = (info["uuid"], tier)
+        if tier and base[1] and tier != base[1]:
             info["identity_stale"] = True
             info["plan"] = sub or tier
     except (OSError, json.JSONDecodeError):
